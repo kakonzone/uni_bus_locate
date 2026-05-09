@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "952469275946",
+    "project_id": "uni-bus-locate",
+    "storage_bucket": "uni-bus-locate.firebasestorage.app",
+    "firebase_url": "https://uni-bus-locate-default-rtdb.asia-southeast1.firebasedatabase.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:952469275946:android:6c730720b6d2d386db8a53",
+        "android_client_info": {
+          "package_name": "com.example.uni_bus_locate"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCtDNiwriQ1GF2fmri-dFJd4v8ekWR_OUQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

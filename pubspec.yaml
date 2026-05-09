@@ -1,0 +1,66 @@
+name: unitrack
+description: "UniTrack — University Bus Live Tracking System for students, teachers, and drivers."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # ─── Firebase ─────────────────────────────────────────────────────────────
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
+  firebase_database: ^11.1.4
+
+  # ─── Map & Location ───────────────────────────────────────────────────────
+  # ✅ BUG 4 FIX: google_maps_flutter পুরো family remove করা হলো।
+  # App এখন flutter_map (OpenStreetMap) + latlong2 ব্যবহার করছে।
+  # google_maps_flutter_android / _platform_interface রাখলে latlong2-এর LatLng-এর
+  # সাথে naming conflict + extra APK size + অপ্রয়োজনীয় Google Play Services।
+  geolocator: ^14.0.2
+  geocoding: ^3.0.0
+  connectivity_plus: ^6.0.3
+  flutter_map: ^6.1.0
+  latlong2: ^0.9.1
+  flutter_map_animations: ^0.6.0
+
+  # ─── Scanner ──────────────────────────────────────────────────────────────
+  mobile_scanner: ^5.2.0
+
+  # ─── Background Service & Wake Lock ───────────────────────────────────────
+  flutter_foreground_task: ^8.13.0
+  wakelock_plus: ^1.2.8
+
+  # ─── State Management ─────────────────────────────────────────────────────
+  flutter_riverpod: ^2.5.1
+
+  # ─── Local Storage ────────────────────────────────────────────────────────
+  shared_preferences: ^2.3.2
+
+  # ─── Notifications ────────────────────────────────────────────────────────
+  flutter_local_notifications: ^18.0.0
+
+  # ─── Permissions ──────────────────────────────────────────────────────────
+  permission_handler: ^11.3.1
+  device_info_plus: ^10.1.0
+
+  # ─── Share functionality ───────────────────────────────────────────────────
+  share_plus: ^10.0.0
+
+  # ─── Utilities ────────────────────────────────────────────────────────────
+  intl: ^0.19.0
+  http: ^1.2.2
+  collection: ^1.18.0
+  cupertino_icons: ^1.0.8
+  google_maps_flutter: ^2.17.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
