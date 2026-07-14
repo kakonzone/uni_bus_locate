@@ -5,66 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../providers/auth_providers.dart';
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-class AppColors {
-  static const primary = Color(0xFF1B2CC1);
-  static const primaryDark = Color(0xFF1421A0);
-  static const primaryLight = Color(0xFF3D52D5);
-  static const accent = Color(0xFF00C853);
-  static const surface = Color(0xFFF5F6FF);
-  static const cardBg = Colors.white;
-  static const textDark = Color(0xFF0D1333);
-  static const textMid = Color(0xFF4A5180);
-  static const textLight = Color(0xFF9AA0C4);
-  static const border = Color(0xFFDFE1F5);
-  static const error = Color(0xFFE53935);
-}
-
-class AppTextStyles {
-  static const displayLarge = TextStyle(
-    fontFamily: 'DM Sans',
-    fontSize: 32,
-    fontWeight: FontWeight.w700,
-    color: AppColors.textDark,
-    letterSpacing: -0.5,
-    height: 1.15,
-  );
-
-  static const headlineMedium = TextStyle(
-    fontFamily: 'DM Sans',
-    fontSize: 20,
-    fontWeight: FontWeight.w600,
-    color: AppColors.textDark,
-    letterSpacing: -0.2,
-  );
-
-  static const bodyLarge = TextStyle(
-    fontFamily: 'DM Sans',
-    fontSize: 15,
-    fontWeight: FontWeight.w400,
-    color: AppColors.textMid,
-    height: 1.5,
-  );
-
-  static const labelMedium = TextStyle(
-    fontFamily: 'DM Sans',
-    fontSize: 13,
-    fontWeight: FontWeight.w500,
-    color: AppColors.textMid,
-    letterSpacing: 0.2,
-  );
-
-  static const buttonText = TextStyle(
-    fontFamily: 'DM Sans',
-    fontSize: 16,
-    fontWeight: FontWeight.w600,
-    color: Colors.white,
-    letterSpacing: 0.3,
-  );
-}
+import '../../theme/app_color.dart';
+import '../../theme/app_text_styles.dart';
 
 // ─── Login Screen ──────────────────────────────────────────────────────────────
 
@@ -201,7 +143,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
               Text(
                 label,
                 style: TextStyle(
-                  fontFamily: 'DM Sans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
                   color: isActive ? Colors.white : AppColors.textLight,
@@ -412,7 +354,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
         borderRadius: BorderRadius.circular(14),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primary.withOpacity(0.35),
+            color: AppColors.primary.withValues(alpha: 0.35),
             blurRadius: 16,
             offset: const Offset(0, 6),
           ),
@@ -429,9 +371,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: AppColors.accent.withOpacity(0.12),
+        color: AppColors.accent.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.accent.withOpacity(0.3), width: 1),
+        border: Border.all(color: AppColors.accent.withValues(alpha: 0.3), width: 1),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -444,7 +386,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.accent.withOpacity(0.5),
+                  color: AppColors.accent.withValues(alpha: 0.5),
                   blurRadius: 6,
                 ),
               ],
@@ -473,7 +415,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
         gradient: LinearGradient(
           colors: [
             AppColors.surface,
-            AppColors.primary.withOpacity(0.06),
+            AppColors.primary.withValues(alpha: 0.06),
             AppColors.surface,
           ],
         ),
@@ -535,7 +477,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [
-              AppColors.primary.withOpacity(0.4),
+              AppColors.primary.withValues(alpha: 0.4),
               AppColors.border,
             ],
           ),
@@ -655,7 +597,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
         boxShadow: isFocused
             ? [
                 BoxShadow(
-                  color: AppColors.primary.withOpacity(0.12),
+                  color: AppColors.primary.withValues(alpha: 0.12),
                   blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
@@ -715,7 +657,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
         boxShadow: _passwordFocused
             ? [
                 BoxShadow(
-                  color: AppColors.primary.withOpacity(0.12),
+                  color: AppColors.primary.withValues(alpha: 0.12),
                   blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
@@ -783,10 +725,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: AppColors.error.withOpacity(0.08),
+        color: AppColors.error.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: AppColors.error.withOpacity(0.25),
+          color: AppColors.error.withValues(alpha: 0.25),
           width: 1,
         ),
       ),
@@ -827,7 +769,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
               ? []
               : [
                   BoxShadow(
-                    color: AppColors.primary.withOpacity(0.4),
+                    color: AppColors.primary.withValues(alpha: 0.4),
                     blurRadius: 20,
                     offset: const Offset(0, 8),
                     spreadRadius: -2,
@@ -839,8 +781,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
           child: InkWell(
             onTap: _isLoading ? null : _handleLogin,
             borderRadius: BorderRadius.circular(16),
-            splashColor: Colors.white.withOpacity(0.15),
-            highlightColor: Colors.white.withOpacity(0.08),
+            splashColor: Colors.white.withValues(alpha: 0.15),
+            highlightColor: Colors.white.withValues(alpha: 0.08),
             child: Center(
               child: _isLoading
                   ? const SizedBox(

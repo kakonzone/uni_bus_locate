@@ -6,6 +6,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../theme/app_color.dart';
+import '../theme/app_text_styles.dart';
+
 // ─────────────────────────────────────────────
 // Nav item definition
 // ─────────────────────────────────────────────
@@ -83,19 +86,19 @@ class UniTrackBottomNav extends StatelessWidget {
         color: Colors.white,
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF1B2CC1).withOpacity(0.08),
+            color: AppColors.navy.withValues(alpha: 0.08),
             blurRadius: 20,
             offset: const Offset(0, -4),
           ),
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withValues(alpha: 0.04),
             blurRadius: 6,
             offset: const Offset(0, -1),
           ),
         ],
         border: Border(
           top: BorderSide(
-            color: const Color(0xFF1B2CC1).withOpacity(0.10),
+            color: AppColors.navy.withValues(alpha: 0.10),
             width: 1,
           ),
         ),
@@ -157,8 +160,8 @@ class _NavTileState extends State<_NavTile>
   late Animation<double> _pillWidth;
   late Animation<double> _pillOpacity;
 
-  static const _primary = Color(0xFF1B2CC1);
-  static const _inactive = Color(0xFF9CA3AF);
+  static const _primary = AppColors.navy;
+  static const _inactive = AppColors.inactiveGrey;
 
   @override
   void initState() {
@@ -229,7 +232,7 @@ class _NavTileState extends State<_NavTile>
                           width: 48,
                           height: 32,
                           decoration: BoxDecoration(
-                            color: _primary.withOpacity(0.10),
+                            color: _primary.withValues(alpha: 0.10),
                             borderRadius: BorderRadius.circular(16),
                           ),
                         ),
@@ -267,7 +270,7 @@ class _NavTileState extends State<_NavTile>
               Text(
                 widget.item.label,
                 style: TextStyle(
-                  fontFamily: 'DM Sans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 10.5,
                   fontWeight:
                       widget.isActive ? FontWeight.w700 : FontWeight.w500,
@@ -337,7 +340,7 @@ class _LiveDotState extends State<_LiveDot>
                 width: 5,
                 height: 5,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF16A34A).withOpacity(_opacity.value),
+                  color: AppColors.activeGreen.withValues(alpha: _opacity.value),
                   shape: BoxShape.circle,
                 ),
               ),
@@ -347,7 +350,7 @@ class _LiveDotState extends State<_LiveDot>
             width: 6,
             height: 6,
             decoration: const BoxDecoration(
-              color: Color(0xFF16A34A),
+              color: AppColors.activeGreen,
               shape: BoxShape.circle,
             ),
           ),
@@ -393,14 +396,14 @@ class DriverBottomNav extends StatelessWidget {
         color: Colors.white,
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF1B2CC1).withOpacity(0.08),
+            color: AppColors.navy.withValues(alpha: 0.08),
             blurRadius: 20,
             offset: const Offset(0, -4),
           ),
         ],
         border: Border(
           top: BorderSide(
-            color: const Color(0xFF1B2CC1).withOpacity(0.10),
+            color: AppColors.navy.withValues(alpha: 0.10),
             width: 1,
           ),
         ),
@@ -491,13 +494,13 @@ class _TripStatusPillState extends State<_TripStatusPill>
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
           color: widget.isActive
-              ? const Color(0xFF16A34A)
-              : const Color(0xFFF3F4F6),
+              ? AppColors.activeGreen
+              : AppColors.surface,
           borderRadius: BorderRadius.circular(20),
           boxShadow: widget.isActive
               ? [
                   BoxShadow(
-                    color: const Color(0xFF16A34A).withOpacity(0.35),
+                    color: AppColors.activeGreen.withValues(alpha: 0.35),
                     blurRadius: 10,
                     offset: const Offset(0, 2),
                   ),
@@ -521,7 +524,7 @@ class _TripStatusPillState extends State<_TripStatusPill>
                       Text(
                         'LIVE',
                         style: TextStyle(
-                          fontFamily: 'DM Sans',
+                          fontFamily: AppTextStyles.fontFamily,
                           fontSize: 11,
                           fontWeight: FontWeight.w800,
                           color: Colors.white,
@@ -535,10 +538,10 @@ class _TripStatusPillState extends State<_TripStatusPill>
             : const Text(
                 'OFF DUTY',
                 style: TextStyle(
-                  fontFamily: 'DM Sans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 10,
                   fontWeight: FontWeight.w600,
-                  color: Color(0xFF9CA3AF),
+                  color: AppColors.textMuted,
                   letterSpacing: 0.8,
                 ),
               ),

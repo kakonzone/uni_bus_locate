@@ -4,17 +4,11 @@
 // BUG-3 FIXED: _currentWindow now time-based (7–18 active, 18–22 low power, else sleep)
 // BUG-4 FIXED: debugPrint added before/after Firebase write in _pollAndWrite()
 
-import 'dart:async';
-import 'dart:math' as math;
-
-import 'package:flutter/foundation.dart'; // BUG-4: debugPrint এর জন্য
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
-import '../models/location_model.dart';
 import '../models/bus_model.dart';
-import '../models/tracking_model.dart';
 import '../services/firebase_service.dart';
 import '../services/location_service.dart';
 
@@ -158,82 +152,7 @@ final etaProvider = Provider.family<EtaResult?, String>((ref, busId) {
 // final studentPositionProvider = myLocationProvider;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 7.  MAP VIEWPORT STATE
-// ─────────────────────────────────────────────────────────────────────────────
-
-class MapViewportState {
-  final LatLng center;
-  final double zoom;
-  final bool followSelectedBus;
-
-  const MapViewportState({
-    required this.center,
-    required this.zoom,
-    this.followSelectedBus = true,
-  });
-
-  MapViewportState copyWith({
-    LatLng? center,
-    double? zoom,
-    bool? followSelectedBus,
-  }) {
-    return MapViewportState(
-      center: center ?? this.center,
-      zoom: zoom ?? this.zoom,
-      followSelectedBus: followSelectedBus ?? this.followSelectedBus,
-    );
-  }
-}
-
-class MapViewportNotifier extends StateNotifier<MapViewportState> {
-  MapViewportNotifier()
-      : super(
-          const MapViewportState(
-            center: LatLng(22.8696, 91.1001),
-            zoom: 15.0,
-          ),
-        );
-
-  void updateCenter(LatLng center, double zoom) {
-    state = state.copyWith(center: center, zoom: zoom);
-  }
-
-  void setFollowBus(bool follow) {
-    state = state.copyWith(followSelectedBus: follow);
-  }
-
-  // BusModel.lat/lng এখন non-nullable — 0.0 check করো
-  void focusBus(BusModel bus) {
-    if (bus.lat == 0.0 && bus.lng == 0.0) return;
-    state = state.copyWith(
-      center: LatLng(bus.lat, bus.lng),
-      zoom: 15.0,
-      followSelectedBus: true,
-    );
-  }
-}
-
-final mapViewportProvider =
-    StateNotifierProvider<MapViewportNotifier, MapViewportState>((ref) {
-  return MapViewportNotifier();
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 8.  WATCH COUNT AGGREGATOR
-// ─────────────────────────────────────────────────────────────────────────────
-
-final watchCountMapProvider = Provider<Map<String, int>>((ref) {
-  final buses = ref.watch(liveBusListProvider).valueOrNull ?? [];
-  return {for (final b in buses) b.id: b.watchCount};
-});
-
-final totalWatchersProvider = Provider<int>((ref) {
-  final map = ref.watch(watchCountMapProvider);
-  return map.values.fold(0, (sum, v) => sum + v);
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 9.  PERMISSION STATUS
+// 7.  PERMISSION STATUS
 // ─────────────────────────────────────────────────────────────────────────────
 
 class PermissionStatus {

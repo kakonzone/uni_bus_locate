@@ -14,8 +14,9 @@ class StoppageNotificationService {
 
   // ✅ FIX Bug 2: Track both busId AND trip start time so same busId
   //    on a new trip still triggers a full reset.
+  // TODO: Implement trip start time tracking to reset notifications on new trip
   String? _currentBusId;
-  DateTime? _tripStartTime;
+  DateTime? _tripStartTime; // Reserved for future use
 
   // ── Method 1: Initialise plugin + Android channel ─────────────────────────
   Future<void> init() async {
@@ -53,7 +54,6 @@ class StoppageNotificationService {
   }) {
     if (busId != _currentBusId) {
       _currentBusId = busId;
-      _tripStartTime = DateTime.now(); // ✅ FIX Bug 2: anchor a new trip time
       _notifiedStops.clear();
       _passedStops.clear();
     }

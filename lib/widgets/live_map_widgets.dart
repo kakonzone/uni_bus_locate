@@ -15,7 +15,6 @@
 //   • Full dark/light tile switching (OpenStreetMap only — no API key)
 //   • Offline-safe: graceful tile load error handling
 
-import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:collection/collection.dart' show IterableExtension;
@@ -23,6 +22,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_animations/flutter_map_animations.dart';
 import 'package:latlong2/latlong.dart';
+
+import '../theme/app_color.dart';
+import '../theme/app_text_styles.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Data contracts
@@ -76,25 +78,14 @@ class MapStopMarker {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Colour & style constants
+// Route split result
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _C {
-  static const navy = Color(0xFF1B2CC1);
-  static const navyLight = Color(0xFF3547D4);
-  static const navySurface = Color(0xFFE8EAFC);
-  static const activeGreen = Color(0xFF1DB954);
-  static const warningAmber = Color(0xFFFF9800);
-  static const errorRed = Color(0xFFE53935);
-  static const textPrimary = Color(0xFF111827);
-  static const textSecondary = Color(0xFF6B7280);
-  static const white = Colors.white;
-  static const routeLine = Color(0xFF1B2CC1);
-  // Muted grey for traveled portion of route trail
-  static const routeTrailTraveled = Color(0xFFB0BEC5);
-  static const trailLine = Color(0xFF90CAF9);
-  static const userDot = Color(0xFF2196F3);
-  static const shadow = Color(0x22000000);
+class RouteSplit {
+  final List<LatLng> traveled;
+  final List<LatLng> remaining;
+
+  const RouteSplit({required this.traveled, required this.remaining});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -347,18 +338,19 @@ class _LiveMapWidgetState extends State<LiveMapWidget>
   // ─────────────────────────────────────────────────────────────────────────
 
   /// Splits route points into traveled and remaining portions based on bus position
-  (List<LatLng> traveled, List<LatLng> remaining) _splitRouteByBusPosition(
+  RouteSplit _splitRouteByBusPosition(
     List<LatLng> routePoints,
     LatLng busPosition,
   ) {
-    if (routePoints.length < 2) return ([], []);
+    if (routePoints.length < 2) {
+      return const RouteSplit(traveled: [], remaining: []);
+    }
 
     final traveled = <LatLng>[];
     final remaining = <LatLng>[];
 
     const distance = Distance();
 
-    // Find the closest point on the route to the bus position
     int closestIndex = 0;
     double minDist = double.infinity;
 
@@ -370,17 +362,15 @@ class _LiveMapWidgetState extends State<LiveMapWidget>
       }
     }
 
-    // Points up to and including the closest point are traveled
     traveled.addAll(routePoints.take(closestIndex + 1));
-    // Add bus position as the transition point
+    // Overlap busPosition in both lists at the transition for visual continuity.
     if (closestIndex < routePoints.length - 1) {
       traveled.add(busPosition);
       remaining.add(busPosition);
     }
-    // Remaining points from closest point onwards
     remaining.addAll(routePoints.skip(closestIndex));
 
-    return (traveled, remaining);
+    return RouteSplit(traveled: traveled, remaining: remaining);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -407,7 +397,7 @@ class _LiveMapWidgetState extends State<LiveMapWidget>
       children: [
         // ── flutter_map ──────────────────────────────────────────────────────
         FlutterMap(
-          mapController: _mapCtrl,
+          mapController: _mapCtrl.mapController,
           options: MapOptions(
             initialCenter: _initialCenter,
             initialZoom: widget.initialZoom,
@@ -436,7 +426,7 @@ class _LiveMapWidgetState extends State<LiveMapWidget>
               },
               // Tile styling: slight hue shift toward navy for brand consistency
               tileBuilder: (ctx, tileWidget, tile) => ColorFiltered(
-                colorFilter: ColorFilter.matrix(<double>[
+                colorFilter: const ColorFilter.matrix(<double>[
                   0.95, 0.00, 0.00, 0, 0, // R channel
                   0.00, 0.97, 0.00, 0, 0, // G channel
                   0.00, 0.00, 1.05, 0, 0, // B channel — very slight blue push
@@ -458,7 +448,7 @@ class _LiveMapWidgetState extends State<LiveMapWidget>
                     Polyline(
                       points: traveledRoute,
                       strokeWidth: 6,
-                      color: _C.routeTrailTraveled.withValues(alpha: 0.15),
+                      color: AppColors.routeTrailTraveled.withValues(alpha: 0.15),
                     ),
 
                   // Traveled portion (muted grey)
@@ -466,8 +456,7 @@ class _LiveMapWidgetState extends State<LiveMapWidget>
                     Polyline(
                       points: traveledRoute,
                       strokeWidth: 3.5,
-                      color: _C.routeTrailTraveled.withValues(alpha: 0.6),
-                      strokePattern: StrokePattern.solid(),
+                      color: AppColors.routeTrailTraveled.withValues(alpha: 0.6),
                     ),
 
                   // Shadow / glow for remaining portion (navy)
@@ -475,7 +464,7 @@ class _LiveMapWidgetState extends State<LiveMapWidget>
                     Polyline(
                       points: remainingRoute,
                       strokeWidth: 6,
-                      color: _C.navy.withValues(alpha: 0.15),
+                      color: AppColors.navy.withValues(alpha: 0.15),
                     ),
 
                   // Remaining portion (brand navy)
@@ -483,8 +472,7 @@ class _LiveMapWidgetState extends State<LiveMapWidget>
                     Polyline(
                       points: remainingRoute,
                       strokeWidth: 3.5,
-                      color: _C.routeLine.withValues(alpha: 0.75),
-                      strokePattern: StrokePattern.solid(),
+                      color: AppColors.routeLine.withValues(alpha: 0.75),
                     ),
 
                   // Dashed overlay for direction feel (remaining portion only)
@@ -493,8 +481,7 @@ class _LiveMapWidgetState extends State<LiveMapWidget>
                       points: remainingRoute,
                       strokeWidth: 1.5,
                       color: Colors.white.withValues(alpha: 0.5),
-                      // FIX #1: Replaced isDotted: true with strokePattern
-                      strokePattern: StrokePattern.dashed(),
+                      isDotted: true,
                     ),
                 ],
               ),
@@ -510,8 +497,8 @@ class _LiveMapWidgetState extends State<LiveMapWidget>
                     radius: widget.userAccuracyMeters,
                     useRadiusInMeter: true,
                     // FIX #5: withOpacity -> withValues
-                    color: _C.userDot.withValues(alpha: 0.12),
-                    borderColor: _C.userDot.withValues(alpha: 0.4),
+                    color: AppColors.userDot.withValues(alpha: 0.12),
+                    borderColor: AppColors.userDot.withValues(alpha: 0.4),
                     borderStrokeWidth: 1,
                   ),
                 ],
@@ -578,14 +565,14 @@ class _LiveMapWidgetState extends State<LiveMapWidget>
             ),
 
             // ── Attribution ──────────────────────────────────────────────────
-            RichAttributionWidget(
-              animationConfig: const ScaleRAWA(),
+            const RichAttributionWidget(
+              animationConfig: ScaleRAWA(),
               attributions: [
                 TextSourceAttribution(
                   '© OpenStreetMap contributors',
-                  textStyle: const TextStyle(
+                  textStyle: TextStyle(
                     fontSize: 10,
-                    color: _C.textSecondary,
+                    color: AppColors.textSecondary,
                   ),
                 ),
               ],
@@ -623,8 +610,8 @@ class _LiveMapWidgetState extends State<LiveMapWidget>
           right: 12,
           bottom: widget.showInfoPanel ? 130 : 20,
           child: _ZoomControls(
-            onZoomIn: () => _mapCtrl.animateTo(zoom: _mapCtrl.camera.zoom + 1),
-            onZoomOut: () => _mapCtrl.animateTo(zoom: _mapCtrl.camera.zoom - 1),
+            onZoomIn: () => _mapCtrl.animatedZoomIn(),
+            onZoomOut: () => _mapCtrl.animatedZoomOut(),
           ),
         ),
 
@@ -644,13 +631,13 @@ class _LiveMapWidgetState extends State<LiveMapWidget>
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  CircularProgressIndicator(color: _C.navy),
+                  CircularProgressIndicator(color: AppColors.navy),
                   SizedBox(height: 12),
                   Text(
                     'Loading map…',
                     style: TextStyle(
-                      fontFamily: 'DM Sans',
-                      color: _C.textSecondary,
+                      fontFamily: AppTextStyles.fontFamily,
+                      color: AppColors.textSecondary,
                       fontSize: 14,
                     ),
                   ),
@@ -714,8 +701,8 @@ class _BusMarkerWidgetState extends State<_BusMarkerWidget>
   @override
   Widget build(BuildContext context) {
     final size = widget.isFocused ? 48.0 : 36.0;
-    final color = widget.bus.isActive ? _C.navy : Colors.grey.shade400;
-    final borderColor = widget.isFocused ? _C.activeGreen : Colors.white;
+    final color = widget.bus.isActive ? AppColors.navy : Colors.grey.shade400;
+    final borderColor = widget.isFocused ? AppColors.activeGreen : Colors.white;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -735,7 +722,7 @@ class _BusMarkerWidgetState extends State<_BusMarkerWidget>
                       width: size * 0.6,
                       height: size * 0.6,
                       decoration: BoxDecoration(
-                        color: widget.isFocused ? _C.activeGreen : _C.navy,
+                        color: widget.isFocused ? AppColors.activeGreen : AppColors.navy,
                         shape: BoxShape.circle,
                       ),
                     ),
@@ -778,12 +765,12 @@ class _BusMarkerWidgetState extends State<_BusMarkerWidget>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
-              color: _C.navy,
+              color: AppColors.navy,
               borderRadius: BorderRadius.circular(20),
               boxShadow: [
                 BoxShadow(
                   // FIX #5: withOpacity -> withValues
-                  color: _C.navy.withValues(alpha: 0.3),
+                  color: AppColors.navy.withValues(alpha: 0.3),
                   blurRadius: 6,
                   offset: const Offset(0, 2),
                 ),
@@ -792,7 +779,7 @@ class _BusMarkerWidgetState extends State<_BusMarkerWidget>
             child: Text(
               widget.bus.busName,
               style: const TextStyle(
-                fontFamily: 'DM Sans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: 10.5,
                 fontWeight: FontWeight.w700,
                 color: Colors.white,
@@ -851,13 +838,13 @@ class _UserDotWidgetState extends State<_UserDotWidget>
           width: 18,
           height: 18,
           decoration: BoxDecoration(
-            color: _C.userDot,
+            color: AppColors.userDot,
             shape: BoxShape.circle,
             border: Border.all(color: Colors.white, width: 2.5),
             boxShadow: [
               BoxShadow(
                 // FIX #5: withOpacity -> withValues
-                color: _C.userDot.withValues(alpha: 0.45),
+                color: AppColors.userDot.withValues(alpha: 0.45),
                 blurRadius: 6,
                 spreadRadius: 1,
               ),
@@ -886,35 +873,35 @@ class _StopMarkerWidget extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
           decoration: BoxDecoration(
-            color: stop.isGate ? _C.navy : Colors.white,
+            color: stop.isGate ? AppColors.navy : Colors.white,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: stop.isGate ? _C.navy : Colors.grey.shade300,
+              color: stop.isGate ? AppColors.navy : Colors.grey.shade300,
             ),
             boxShadow: const [
-              BoxShadow(color: _C.shadow, blurRadius: 4, offset: Offset(0, 2)),
+              BoxShadow(color: AppColors.shadow, blurRadius: 4, offset: Offset(0, 2)),
             ],
           ),
           child: Text(
             stop.label,
             style: TextStyle(
-              fontFamily: 'DM Sans',
+              fontFamily: AppTextStyles.fontFamily,
               fontSize: 10,
               fontWeight: FontWeight.w700,
-              color: stop.isGate ? Colors.white : _C.textPrimary,
+              color: stop.isGate ? Colors.white : AppColors.textPrimary,
             ),
           ),
         ),
         Container(
           width: 2,
           height: 8,
-          color: stop.isGate ? _C.navy : Colors.grey.shade400,
+          color: stop.isGate ? AppColors.navy : Colors.grey.shade400,
         ),
         Container(
           width: 8,
           height: 8,
           decoration: BoxDecoration(
-            color: stop.isGate ? _C.navy : Colors.grey.shade400,
+            color: stop.isGate ? AppColors.navy : Colors.grey.shade400,
             shape: BoxShape.circle,
           ),
         ),
@@ -967,8 +954,8 @@ class _SingleBusPanel extends StatelessWidget {
             : '${bus.etaMinutes} min';
 
     final etaColor = bus.etaMinutes >= 0 && bus.etaMinutes <= 5
-        ? _C.activeGreen
-        : _C.warningAmber;
+        ? AppColors.activeGreen
+        : AppColors.warningAmber;
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),
@@ -977,7 +964,7 @@ class _SingleBusPanel extends StatelessWidget {
           color: Colors.white,
           borderRadius: BorderRadius.circular(16),
           boxShadow: const [
-            BoxShadow(color: _C.shadow, blurRadius: 16, offset: Offset(0, 4)),
+            BoxShadow(color: AppColors.shadow, blurRadius: 16, offset: Offset(0, 4)),
           ],
         ),
         child: Column(
@@ -987,7 +974,7 @@ class _SingleBusPanel extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: const BoxDecoration(
-                color: _C.navy,
+                color: AppColors.navy,
                 borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
               ),
               child: Row(
@@ -1002,7 +989,7 @@ class _SingleBusPanel extends StatelessWidget {
                     child: Text(
                       bus.busName,
                       style: const TextStyle(
-                        fontFamily: 'DM Sans',
+                        fontFamily: AppTextStyles.fontFamily,
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
                         color: Colors.white,
@@ -1017,7 +1004,7 @@ class _SingleBusPanel extends StatelessWidget {
                     ),
                     decoration: BoxDecoration(
                       color: bus.isActive
-                          ? _C.activeGreen
+                          ? AppColors.activeGreen
                           // FIX #5: withOpacity -> withValues
                           : Colors.white.withValues(alpha: 0.3),
                       borderRadius: BorderRadius.circular(20),
@@ -1025,7 +1012,7 @@ class _SingleBusPanel extends StatelessWidget {
                     child: Text(
                       bus.isActive ? 'LIVE' : 'OFFLINE',
                       style: const TextStyle(
-                        fontFamily: 'DM Sans',
+                        fontFamily: AppTextStyles.fontFamily,
                         fontSize: 9.5,
                         fontWeight: FontWeight.w700,
                         color: Colors.white,
@@ -1048,7 +1035,7 @@ class _SingleBusPanel extends StatelessWidget {
                     value: bus.isActive
                         ? '${bus.speedKmh.toStringAsFixed(0)} km/h'
                         : '—',
-                    valueColor: _C.textPrimary,
+                    valueColor: AppColors.textPrimary,
                   ),
                   const _PanelDivider(),
                   _PanelStat(
@@ -1062,7 +1049,7 @@ class _SingleBusPanel extends StatelessWidget {
                     icon: Icons.navigation_rounded,
                     label: 'Heading',
                     value: _headingLabel(bus.heading),
-                    valueColor: _C.textPrimary,
+                    valueColor: AppColors.textPrimary,
                   ),
                 ],
               ),
@@ -1102,7 +1089,7 @@ class _MultiBusSummaryPanel extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         boxShadow: const [
-          BoxShadow(color: _C.shadow, blurRadius: 16, offset: Offset(0, 4)),
+          BoxShadow(color: AppColors.shadow, blurRadius: 16, offset: Offset(0, 4)),
         ],
       ),
       child: Row(
@@ -1111,12 +1098,12 @@ class _MultiBusSummaryPanel extends StatelessWidget {
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color: _C.navySurface,
+              color: AppColors.navySurface,
               borderRadius: BorderRadius.circular(12),
             ),
             child: const Icon(
               Icons.directions_bus_rounded,
-              color: _C.navy,
+              color: AppColors.navy,
               size: 22,
             ),
           ),
@@ -1127,18 +1114,18 @@ class _MultiBusSummaryPanel extends StatelessWidget {
               Text(
                 '$activeBuses of $totalBuses buses active',
                 style: const TextStyle(
-                  fontFamily: 'DM Sans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
-                  color: _C.textPrimary,
+                  color: AppColors.textPrimary,
                 ),
               ),
               const Text(
                 'Tap a bus marker to focus',
                 style: TextStyle(
-                  fontFamily: 'DM Sans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 12,
-                  color: _C.textSecondary,
+                  color: AppColors.textSecondary,
                 ),
               ),
             ],
@@ -1150,17 +1137,17 @@ class _MultiBusSummaryPanel extends StatelessWidget {
             decoration: BoxDecoration(
               color: activeBuses > 0
                   // FIX #5: withOpacity -> withValues
-                  ? _C.activeGreen.withValues(alpha: 0.12)
+                  ? AppColors.activeGreen.withValues(alpha: 0.12)
                   : Colors.grey.shade100,
               borderRadius: BorderRadius.circular(20),
             ),
             child: Text(
               '$activeBuses LIVE',
               style: TextStyle(
-                fontFamily: 'DM Sans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
-                color: activeBuses > 0 ? _C.activeGreen : _C.textSecondary,
+                color: activeBuses > 0 ? AppColors.activeGreen : AppColors.textSecondary,
               ),
             ),
           ),
@@ -1191,14 +1178,14 @@ class _PanelStat extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 12, color: _C.textSecondary),
+              Icon(icon, size: 12, color: AppColors.textSecondary),
               const SizedBox(width: 4),
               Text(
                 label,
                 style: const TextStyle(
-                  fontFamily: 'DM Sans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 11,
-                  color: _C.textSecondary,
+                  color: AppColors.textSecondary,
                 ),
               ),
             ],
@@ -1207,7 +1194,7 @@ class _PanelStat extends StatelessWidget {
           Text(
             value,
             style: TextStyle(
-              fontFamily: 'DM Sans',
+              fontFamily: AppTextStyles.fontFamily,
               fontSize: 16,
               fontWeight: FontWeight.w800,
               color: valueColor,
@@ -1225,7 +1212,7 @@ class _PanelDivider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(width: 1, height: 32, color: const Color(0xFFEEEEF5));
+    return Container(width: 1, height: 32, color: AppColors.chipDivider);
   }
 }
 
@@ -1246,14 +1233,14 @@ class _ZoomControls extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         boxShadow: const [
-          BoxShadow(color: _C.shadow, blurRadius: 8, offset: Offset(0, 2)),
+          BoxShadow(color: AppColors.shadow, blurRadius: 8, offset: Offset(0, 2)),
         ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           _ZoomBtn(icon: Icons.add, onTap: onZoomIn),
-          Container(height: 1, width: 36, color: const Color(0xFFEEEEF5)),
+          Container(height: 1, width: 36, color: AppColors.chipDivider),
           _ZoomBtn(icon: Icons.remove, onTap: onZoomOut),
         ],
       ),
@@ -1277,7 +1264,7 @@ class _ZoomBtn extends StatelessWidget {
         child: SizedBox(
           width: 40,
           height: 40,
-          child: Icon(icon, color: _C.navy, size: 20),
+          child: Icon(icon, color: AppColors.navy, size: 20),
         ),
       ),
     );
@@ -1301,12 +1288,12 @@ class _RecenterButton extends StatelessWidget {
         width: 40,
         height: 40,
         decoration: BoxDecoration(
-          color: _C.navy,
+          color: AppColors.navy,
           shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
               // FIX #5: withOpacity -> withValues
-              color: _C.navy.withValues(alpha: 0.4),
+              color: AppColors.navy.withValues(alpha: 0.4),
               blurRadius: 8,
               offset: const Offset(0, 3),
             ),
@@ -1339,7 +1326,7 @@ class _TileErrorBanner extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
           // FIX #5: withOpacity -> withValues
-          color: _C.errorRed.withValues(alpha: 0.95),
+          color: AppColors.errorRed.withValues(alpha: 0.95),
           borderRadius: const BorderRadius.vertical(
             bottom: Radius.circular(12),
           ),
@@ -1352,7 +1339,7 @@ class _TileErrorBanner extends StatelessWidget {
               child: Text(
                 'Map tiles unavailable — check internet connection',
                 style: TextStyle(
-                  fontFamily: 'DM Sans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 12,
                   color: Colors.white,
                   fontWeight: FontWeight.w500,

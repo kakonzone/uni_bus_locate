@@ -1,11 +1,13 @@
 // lib/models/bus_model.dart
 
+import 'tracking_model.dart';
+
 class BusModel {
   final String busId;
   final String name;
   final String route;
   final String? driverName;
-  final String trackMode; // 'phone' | 'gps_device'
+  final BusTrackMode trackMode;
   final bool active;
   final double lat;
   final double lng;
@@ -21,7 +23,7 @@ class BusModel {
     required this.name,
     required this.route,
     this.driverName,
-    this.trackMode = 'phone_gps',
+    this.trackMode = BusTrackMode.phoneGps,
     required this.active,
     required this.lat,
     required this.lng,
@@ -65,24 +67,19 @@ class BusModel {
   factory BusModel.fromMap(String id, Map<String, dynamic> map) {
     return BusModel(
       busId: id,
-      name: (map['name'] as String?) ?? 'Bus $id',
-      route: (map['route'] as String?) ?? '',
-      driverName: map['driverName'] as String?,
-      trackMode: map['trackMode'] as String? ?? 'phone_gps',
+      name: _toString(map['name']) ?? 'Bus $id',
+      route: _toString(map['route']) ?? '',
+      driverName: _toString(map['driverName']),
+      trackMode: BusTrackMode.fromFirebase(map['trackMode']),
       active: (map['active'] as bool?) ?? false,
       lat: _toDouble(map['lat']),
       lng: _toDouble(map['lng']),
       speed: _toDouble(map['speed']),
-      heading: (map['heading'] ?? 0.0).toDouble(),
+      heading: _toDouble(map['heading']),
       destLat: _toDoubleOrNull(map['destLat']),
       destLng: _toDoubleOrNull(map['destLng']),
-      watchCount: (map['watchCount'] as int?) ?? 0,
-      lastUpdate: map['lastUpdate'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(
-              (map['lastUpdate'] as int),
-              isUtc: true,
-            )
-          : null,
+      watchCount: _toInt(map['watchCount']),
+      lastUpdate: _toDateTime(map['lastUpdate']),
     );
   }
 
@@ -91,7 +88,7 @@ class BusModel {
       'name': name,
       'route': route,
       if (driverName != null) 'driverName': driverName,
-      'trackMode': trackMode,
+      'trackMode': trackMode.firebaseValue,
       'active': active,
       'lat': lat,
       'lng': lng,
@@ -123,7 +120,7 @@ class BusModel {
     String? name,
     String? route,
     String? driverName,
-    String? trackMode,
+    BusTrackMode? trackMode,
     bool? active,
     double? lat,
     double? lng,
@@ -190,6 +187,32 @@ class BusModel {
 
   // ─── Private utils ─────────────────────────────────────────────────────────
 
+  static int _toInt(dynamic value) {
+    if (value == null) return 0;
+    if (value is int) return value;
+    if (value is double) return value.round();
+    if (value is String) return int.tryParse(value) ?? 0;
+    return 0;
+  }
+
+  static DateTime? _toDateTime(dynamic value) {
+    if (value == null) return null;
+    if (value is DateTime) return value.toUtc();
+    if (value is int) {
+      return DateTime.fromMillisecondsSinceEpoch(value, isUtc: true);
+    }
+    if (value is double) {
+      return DateTime.fromMillisecondsSinceEpoch(value.round(), isUtc: true);
+    }
+    if (value is String) {
+      final parsed = int.tryParse(value);
+      if (parsed != null) {
+        return DateTime.fromMillisecondsSinceEpoch(parsed, isUtc: true);
+      }
+    }
+    return null;
+  }
+
   static double _toDouble(dynamic value) {
     if (value == null) return 0.0;
     if (value is double) return value;
@@ -205,6 +228,12 @@ class BusModel {
     if (value is int) return value.toDouble();
     if (value is String) return double.tryParse(value);
     return null;
+  }
+
+  static String? _toString(dynamic value) {
+    if (value == null) return null;
+    if (value is String) return value;
+    return value.toString();
   }
 }
 

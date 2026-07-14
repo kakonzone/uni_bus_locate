@@ -33,6 +33,7 @@ dependencies:
   # ─── Background Service & Wake Lock ───────────────────────────────────────
   flutter_foreground_task: ^8.13.0
   wakelock_plus: ^1.2.8
+  android_alarm_manager_plus: ^4.0.4
 
   # ─── State Management ─────────────────────────────────────────────────────
   flutter_riverpod: ^2.5.1
@@ -46,6 +47,7 @@ dependencies:
   # ─── Permissions ──────────────────────────────────────────────────────────
   permission_handler: ^11.3.1
   device_info_plus: ^10.1.0
+  android_intent_plus: ^5.0.2
 
   # ─── Share functionality ───────────────────────────────────────────────────
   share_plus: ^10.0.0
@@ -56,6 +58,7 @@ dependencies:
   collection: ^1.18.0
   cupertino_icons: ^1.0.8
   google_maps_flutter: ^2.17.0
+  google_maps_flutter_android: ^2.19.10
 
 dev_dependencies:
   flutter_test:

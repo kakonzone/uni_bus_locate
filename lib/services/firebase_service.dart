@@ -7,6 +7,7 @@ import 'package:firebase_database/firebase_database.dart';
 import '../models/bus_model.dart';
 import '../models/location_model.dart';
 import '../models/user_model.dart';
+import '../utils/retry.dart';
 import 'firebase_globals.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -34,11 +35,6 @@ class _Path {
   static const String tripStartTime = 'startTime';
   static const String tripEndTime = 'endTime';
   static const String tripStatus = 'status';
-
-  static const String userId = 'id';
-  static const String userBatch = 'batch';
-  static const String userName = 'name';
-  static const String userRole = 'role';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -80,7 +76,10 @@ class FirebaseService {
 
   Future<FirebaseResult<List<BusModel>>> fetchAllBuses() async {
     try {
-      final snap = await _buses.get();
+      final snap = await withRetry(
+        () => _buses.get(),
+        logTag: 'firebase_service.fetchAllBuses',
+      );
       if (!snap.exists || snap.value == null) {
         return const FirebaseResult.success([]);
       }
@@ -102,7 +101,10 @@ class FirebaseService {
 
   Future<FirebaseResult<BusModel>> fetchBus(String busId) async {
     try {
-      final snap = await _buses.child(busId).get();
+      final snap = await withRetry(
+        () => _buses.child(busId).get(),
+        logTag: 'firebase_service.fetchBus',
+      );
       if (!snap.exists || snap.value == null) {
         return const FirebaseResult.failure('Bus not found.');
       }
@@ -118,8 +120,10 @@ class FirebaseService {
 
   Future<FirebaseResult<List<BusModel>>> fetchActiveBuses() async {
     try {
-      final snap =
-          await _buses.orderByChild(_Path.busActive).equalTo(true).get();
+      final snap = await withRetry(
+        () => _buses.orderByChild(_Path.busActive).equalTo(true).get(),
+        logTag: 'firebase_service.fetchActiveBuses',
+      );
       if (!snap.exists || snap.value == null) {
         return const FirebaseResult.success([]);
       }

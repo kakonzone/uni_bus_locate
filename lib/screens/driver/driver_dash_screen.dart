@@ -8,14 +8,17 @@ import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:permission_handler/permission_handler.dart' as ph;
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:android_intent_plus/android_intent.dart';
+import 'package:android_intent_plus/flag.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -23,9 +26,10 @@ import 'package:geocoding/geocoding.dart';
 import '../../services/background_service.dart';
 import '../../services/firebase_globals.dart';
 import '../../providers/tracking_provider.dart';
+import '../../theme/app_color.dart';
+import '../../theme/app_text_styles.dart';
 import '../../providers/bus_providers.dart';
 import '../../models/bus_model.dart';
-import '../../models/tracking_model.dart';
 import '../../providers/location_provider.dart';
 
 // ─── KALMAN FILTER FOR GPS SMOOTHING ─────────────────────────────────────
@@ -67,20 +71,6 @@ class KalmanFilterGPS {
 }
 
 // ─── Theme Constants ──────────────────────────────────────────────────────
-const _navy = Color(0xFF1B2CC1);
-const _navyDark = Color(0xFF1221A0);
-const _navyLight = Color(0xFF2D3FD4);
-const _green = Color(0xFF18C761);
-const _amber = Color(0xFFF59E0B);
-const _red = Color(0xFFEF4444);
-const _surface = Color(0xFFF8F9FF);
-const _cardBg = Colors.white;
-const _textPrimary = Color(0xFF0F172A);
-const _textSecondary = Color(0xFF64748B);
-const _textMuted = Color(0xFF94A3B8);
-const _divider = Color(0xFFE2E8F0);
-const _navyGlow = Color(0xFFE8EAFB);
-
 // FIX 1: Add missing speed limit constant
 const kSpeedLimitKmh = 60.0;
 
@@ -112,6 +102,9 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
   String _searchQuery = '';
   bool _isMiui = false;
   bool _isSamsung = false;
+  bool _isOppo = false;
+  bool _isVivo = false;
+  bool _isHuawei = false;
   bool _batteryWarningDismissed = false;
   bool _bgTripActive = false;
   // STATE FIELD ADDITIONS
@@ -125,10 +118,6 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
   bool _disposed = false;
   // PERF FIX: Debounce geocoding to reduce network calls
   DateTime? _lastGeocodingTime;
-  // WARNING BUG #6 FIX: LRU-capped polyline cache to prevent unbounded memory growth
-  static const _kMaxCacheSize = 5;
-  final Map<String, List<LatLng>> _polylineCache =
-      LinkedHashMap<String, List<LatLng>>();
   // FIX 8: Store trip running state for safe access in dispose()
   bool _isTripRunning = false;
 
@@ -142,16 +131,12 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
   bool _isOffline = false;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
 
-  // ─── Feature 4: Route Deviation ──────────────────────────────────────────
-  bool _isRouteDeviated = false;
-  List<LatLng> _routePolyline = [];
 
   // ─── Google Map ──────────────────────────────────────────────────────────
   GoogleMapController? _mapController;
 
   // ─── GPS Filtering ────────────────────────────────────────
   KalmanFilterGPS? _kalmanFilter;
-  bool _useKalmanFilter = true;
   // BUG FIX: Animation throttle to prevent unbounded queue
   DateTime? _lastCameraAnimTime;
   // FIX 4: Add state field for filtered position
@@ -228,12 +213,12 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
     canvas.drawCircle(
       const Offset(size / 2, size / 2),
       size / 2,
-      Paint()..color = const Color(0xFF1B2CC1).withOpacity(0.18),
+      Paint()..color = AppColors.navy.withValues(alpha: 0.18),
     );
     canvas.drawCircle(
       const Offset(size / 2, size / 2),
       size / 2.8,
-      Paint()..color = const Color(0xFF1B2CC1),
+      Paint()..color = AppColors.navy,
     );
     canvas.drawCircle(
       const Offset(size / 2, size / 2),
@@ -287,6 +272,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
     await _loadResumeState();
     await _requestPermissionsOnce();
     await _detectDevice();
+    await _showOemDialogIfNeeded();
     await _autoResumeIfNeeded();
   }
 
@@ -374,6 +360,10 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
 
     // PERF FIX: Always restart service on resume (simpler than checking isRunning)
     // BUG D-3 FIX: BackgroundService is non-fatal, wrapped in try/catch
+    // DEFENSIVE FIX: Add small delay before starting service on auto-resume path to avoid
+    // possible cold-start plugin registration race with FlutterForegroundTask.
+    // Manual "Start Trip" button doesn't need this as it's user-triggered well after startup.
+    await Future.delayed(const Duration(milliseconds: 300));
     try {
       await BackgroundService().startAndSave(
         busId: savedBusId,
@@ -394,20 +384,20 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
     final prefs = await SharedPreferences.getInstance();
 
     if (!(prefs.getBool('perm_location_asked') ?? false)) {
-      final locStatus = await Permission.locationAlways.status;
+      final locStatus = await ph.Permission.locationAlways.status;
       if (!locStatus.isGranted) {
-        final whenInUse = await Permission.locationWhenInUse.request();
+        final whenInUse = await ph.Permission.locationWhenInUse.request();
         if (whenInUse.isGranted) {
           if (Platform.isAndroid) {
             final sdk = (await DeviceInfoPlugin().androidInfo).version.sdkInt;
             if (sdk >= 30) {
               await _showLocationAlwaysDialog();
-              await openAppSettings();
+              await ph.openAppSettings();
             } else {
-              await Permission.locationAlways.request();
+              await ph.Permission.locationAlways.request();
             }
           } else {
-            await Permission.locationAlways.request();
+            await ph.Permission.locationAlways.request();
           }
         }
       }
@@ -415,12 +405,12 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
     }
 
     if (!(prefs.getBool('perm_notification_asked') ?? false)) {
-      await Permission.notification.request();
+      await ph.Permission.notification.request();
       await prefs.setBool('perm_notification_asked', true);
     }
 
     if (!(prefs.getBool('perm_battery_asked') ?? false)) {
-      await Permission.ignoreBatteryOptimizations.request();
+      await ph.Permission.ignoreBatteryOptimizations.request();
       await prefs.setBool('perm_battery_asked', true);
     }
   }
@@ -434,15 +424,15 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         title: const Row(
           children: [
-            Icon(Icons.location_on_rounded, color: _navy, size: 22),
+            Icon(Icons.location_on_rounded, color: AppColors.navy, size: 22),
             SizedBox(width: 8),
             Text(
               'Location সেট করুন',
               style: TextStyle(
-                fontFamily: 'DMSans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
-                color: _textPrimary,
+                color: AppColors.textPrimary,
               ),
             ),
           ],
@@ -454,9 +444,9 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
             const Text(
               'App Settings খুলবে। নিচের steps follow করুন:',
               style: TextStyle(
-                fontFamily: 'DMSans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: 13.5,
-                color: _textSecondary,
+                color: AppColors.textSecondary,
                 height: 1.5,
               ),
             ),
@@ -472,9 +462,9 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
             child: const Text(
               'বুঝেছি, Settings খুলুন',
               style: TextStyle(
-                fontFamily: 'DMSans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontWeight: FontWeight.w700,
-                color: _navy,
+                color: AppColors.navy,
               ),
             ),
           ),
@@ -493,17 +483,17 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
             width: 24,
             height: 24,
             decoration: BoxDecoration(
-              color: _navy.withOpacity(0.1),
+              color: AppColors.navy.withValues(alpha: 0.1),
               shape: BoxShape.circle,
             ),
             child: Center(
               child: Text(
                 number,
                 style: const TextStyle(
-                  fontFamily: 'DMSans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
-                  color: _navy,
+                  color: AppColors.navy,
                 ),
               ),
             ),
@@ -513,10 +503,10 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
             child: Text(
               text,
               style: const TextStyle(
-                fontFamily: 'DMSans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: 13.5,
                 fontWeight: FontWeight.w600,
-                color: _textPrimary,
+                color: AppColors.textPrimary,
                 height: 1.5,
               ),
             ),
@@ -537,6 +527,12 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
               manufacturer.contains('redmi') ||
               manufacturer.contains('poco');
           _isSamsung = manufacturer.contains('samsung');
+          _isOppo = manufacturer.contains('oppo') ||
+              manufacturer.contains('realme') ||
+              manufacturer.contains('oneplus');
+          _isVivo = manufacturer.contains('vivo');
+          _isHuawei = manufacturer.contains('huawei') ||
+              manufacturer.contains('honor');
         });
       }
     } catch (_) {}
@@ -567,69 +563,14 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
   Future<void> _onBusSelected(BusModel bus) async {
     final isRunning = ref.read(tripStatusProvider) == TripStatus.running;
     if (isRunning) return;
+    final selectStart = DateTime.now();
+    debugPrint('UniTrack [TIMESTAMP]: Bus selection START at ${selectStart.toIso8601String()} for busId=${bus.id}');
     setState(() => _selectedBusId = bus.id);
     // BUG D-1 FIX: Await _saveSelection to ensure SharedPreferences is updated
     await _saveSelection(bus);
     ref.read(selectedBusIdProvider.notifier).state = bus.id;
-    _loadRoutePolyline(bus.id);
-  }
 
-  Future<void> _loadRoutePolyline(String busId) async {
-    // PERF FIX: Check cache first before Firebase read
-    if (_polylineCache.containsKey(busId)) {
-      if (mounted) setState(() => _routePolyline = _polylineCache[busId]!);
-      return;
-    }
-
-    try {
-      final snapshot = await globalDB.ref('buses/$busId/route_polyline').get();
-      if (!snapshot.exists) {
-        if (mounted) setState(() => _routePolyline = []);
-        _polylineCache[busId] = []; // Cache empty result
-        return;
-      }
-      final raw = snapshot.value;
-      final List<LatLng> points = [];
-      if (raw is List) {
-        for (final item in raw) {
-          if (item is Map) {
-            final lat = (item['lat'] ?? item['latitude']) as num?;
-            final lng =
-                (item['lng'] ?? item['longitude'] ?? item['lon']) as num?;
-            // BUG FIX #3: Safe type checking to prevent ClassCastException
-            if (lat is! num || lng is! num) continue;
-            points.add(LatLng(lat.toDouble(), lng.toDouble()));
-          }
-        }
-      }
-      _polylineCache[busId] = points; // Cache the result
-      // WARNING BUG #6 FIX: Cap cache size — evict oldest (LinkedHashMap
-      // preserves insertion order so .keys.first is the oldest entry).
-      if (_polylineCache.length > _kMaxCacheSize) {
-        _polylineCache.remove(_polylineCache.keys.first);
-      }
-      if (mounted) setState(() => _routePolyline = points);
-      debugPrint(
-          'UniTrack: Loaded ${points.length} route polyline points for $busId');
-    } catch (e) {
-      debugPrint('UniTrack: Failed to load route polyline → $e');
-      if (mounted) setState(() => _routePolyline = []);
-    }
-  }
-
-  double _distanceToPolyline(LatLng point, List<LatLng> polyline) {
-    if (polyline.isEmpty) return 0;
-    double minDist = double.infinity;
-    for (final p in polyline) {
-      final d = Geolocator.distanceBetween(
-        point.latitude,
-        point.longitude,
-        p.latitude,
-        p.longitude,
-      );
-      if (d < minDist) minDist = d;
-    }
-    return minDist;
+    // PRELOAD: Load route polyline in tracking_provider before trip starts
   }
 
   Future<void> _updatePlaceName(double lat, double lng) async {
@@ -663,8 +604,11 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
   // ─── TRIP CONTROL ────────────────────────────────────────────────────────
 
   Future<void> _startTrip() async {
+    final tripStart = DateTime.now();
+    debugPrint('UniTrack [TIMESTAMP]: Start Trip TAPPED at ${tripStart.toIso8601String()}');
+
     // BUG 1 FIX: Check for locationAlways permission before starting
-    final locStatus = await Permission.locationAlways.status;
+    final locStatus = await ph.Permission.locationAlways.status;
     // MINOR BUG #9 FIX: Guard ScaffoldMessenger.of(context) against the case
     // where the widget unmounts during the permission status await.
     if (!mounted) return;
@@ -674,11 +618,11 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
           content: Text(
             'Please grant "Allow all the time" location permission in settings.',
           ),
-          backgroundColor: _red,
+          backgroundColor: AppColors.red,
           action: SnackBarAction(
             label: 'SETTINGS',
             textColor: Colors.white,
-            onPressed: openAppSettings,
+            onPressed: ph.openAppSettings,
           ),
         ),
       );
@@ -698,7 +642,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Please select a bus before starting the trip.'),
-          backgroundColor: _red,
+          backgroundColor: AppColors.red,
         ),
       );
       return;
@@ -803,10 +747,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
         setState(() {
           _bgTripActive = false;
           _searchQuery = '';
-          _isRouteDeviated = false;
           _currentPlaceName = '';
-          // FIX 4: Clear polylineCache and filteredPosition in _stopTrip()
-          _polylineCache.clear();
           _filteredPosition = null;
         });
       }
@@ -832,26 +773,26 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
             title: const Text(
               'End Trip?',
               style: TextStyle(
-                fontFamily: 'DMSans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontWeight: FontWeight.w700,
-                color: _navy,
+                color: AppColors.navy,
               ),
             ),
             content: const Text(
               'This will stop GPS tracking and end the current trip.',
-              style: TextStyle(fontFamily: 'DMSans'),
+              style: TextStyle(fontFamily: AppTextStyles.fontFamily),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
                 child: const Text(
                   'Cancel',
-                  style: TextStyle(fontFamily: 'DMSans', color: Colors.grey),
+                  style: TextStyle(fontFamily: AppTextStyles.fontFamily, color: Colors.grey),
                 ),
               ),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: _red,
+                  backgroundColor: AppColors.red,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(10),
                   ),
@@ -859,7 +800,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                 onPressed: () => Navigator.pop(ctx, true),
                 child: const Text(
                   'End Trip',
-                  style: TextStyle(fontFamily: 'DMSans', color: Colors.white),
+                  style: TextStyle(fontFamily: AppTextStyles.fontFamily, color: Colors.white),
                 ),
               ),
             ],
@@ -881,14 +822,14 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Row(
           children: [
-            Icon(Icons.flag_rounded, color: _navy),
+            Icon(Icons.flag_rounded, color: AppColors.navy),
             SizedBox(width: 8),
             Text(
               'Trip Summary',
               style: TextStyle(
-                fontFamily: 'DMSans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontWeight: FontWeight.w700,
-                color: _navy,
+                color: AppColors.navy,
               ),
             ),
           ],
@@ -900,28 +841,28 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
               icon: Icons.straighten_rounded,
               label: 'Total Distance',
               value: _formatDistance(locState.totalDistanceM),
-              color: _green,
+              color: AppColors.activeGreen,
             ),
             const SizedBox(height: 12),
             _SummaryRow(
               icon: Icons.timer_rounded,
               label: 'Trip Duration',
               value: durationStr,
-              color: _navy,
+              color: AppColors.navy,
             ),
             const SizedBox(height: 12),
             _SummaryRow(
               icon: Icons.gps_fixed_rounded,
               label: 'GPS Pings',
               value: '${locState.totalUpdates}',
-              color: const Color(0xFF8B5CF6),
+              color: AppColors.statPurple,
             ),
           ],
         ),
         actions: [
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _navy,
+              backgroundColor: AppColors.navy,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(10),
               ),
@@ -929,7 +870,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
             onPressed: () => Navigator.pop(ctx),
             child: const Text(
               'Done',
-              style: TextStyle(fontFamily: 'DMSans', color: Colors.white),
+              style: TextStyle(fontFamily: AppTextStyles.fontFamily, color: Colors.white),
             ),
           ),
         ],
@@ -978,9 +919,9 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
   Color _modeColor(TrackingMode mode) {
     switch (mode) {
       case TrackingMode.active:
-        return _green;
+        return AppColors.activeGreen;
       case TrackingMode.lowPower:
-        return _amber;
+        return AppColors.amber;
       case TrackingMode.sleep:
         return Colors.blueGrey;
     }
@@ -1060,7 +1001,6 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
         }
 
         // PERF FIX: Batch state updates into single setState call
-        bool? newRouteDeviated;
         LatLng? newFilteredPosition;
 
         // WARNING BUG #7 FIX: Lazily initialize the Kalman filter on the
@@ -1081,34 +1021,13 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
           newFilteredPosition = _kalmanFilter!.position;
         }
 
-        // Check route deviation
-        if (_routePolyline.isNotEmpty) {
-          final currentPos = LatLng(
-            next.position!.latitude,
-            next.position!.longitude,
-          );
-          final distToRoute = _distanceToPolyline(currentPos, _routePolyline);
-          if (!_isRouteDeviated && distToRoute > 200) {
-            newRouteDeviated = true;
-            debugPrint(
-                'UniTrack: Route deviation detected — ${distToRoute.toStringAsFixed(1)}m from route');
-          } else if (_isRouteDeviated && distToRoute <= 150) {
-            newRouteDeviated = false;
-            debugPrint(
-                'UniTrack: Back on route — ${distToRoute.toStringAsFixed(1)}m from route');
-          }
-        }
-
         // Trigger geocoding (async, non-blocking)
         _updatePlaceName(next.position!.latitude, next.position!.longitude);
 
-        // FIX 3: Updated setState condition - only handle position and deviation
-        if ((newFilteredPosition != null || newRouteDeviated != null) &&
-            mounted) {
+        // FIX 3: Updated setState condition - only handle position
+        if (newFilteredPosition != null && mounted) {
           setState(() {
-            if (newFilteredPosition != null)
-              _filteredPosition = newFilteredPosition;
-            if (newRouteDeviated != null) _isRouteDeviated = newRouteDeviated;
+            _filteredPosition = newFilteredPosition;
           });
         }
       }
@@ -1141,85 +1060,101 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
     });
 
     // ─── UI ──────────────────────────────────────────────────────────────────
-    return Scaffold(
-      backgroundColor: _surface,
-      body: Stack(
-        children: [
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            height: 220,
-            child: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [_navyDark, _navyLight],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.only(
-                  bottomLeft: Radius.circular(32),
-                  bottomRight: Radius.circular(32),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        
+        // Check if there's an active trip / background tracking running
+        final tripStatus = ref.read(tripStatusProvider);
+        final isTripActive = tripStatus == TripStatus.running;
+        
+        if (isTripActive) {
+          // Trip is active — minimize the app instead of exiting, so 
+          // background GPS tracking continues uninterrupted.
+          FlutterForegroundTask.minimizeApp();
+        } else {
+          // No active trip — safe to fully exit the app.
+          SystemNavigator.pop();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.pageBg,
+        body: Stack(
+          children: [
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 220,
+              child: Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [AppColors.navyDark, AppColors.navyLight],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.only(
+                    bottomLeft: Radius.circular(32),
+                    bottomRight: Radius.circular(32),
+                  ),
                 ),
               ),
             ),
-          ),
-          SafeArea(
-            child: SlideTransition(
-              position: _slideAnim,
-              child: Column(
-                children: [
-                  _buildTopBar(isRunning),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                      child: Column(
-                        children: [
-                          const SizedBox(height: 12),
-                          if (_isOffline) ...[
-                            _buildOfflineBanner(),
+            SafeArea(
+              child: SlideTransition(
+                position: _slideAnim,
+                child: Column(
+                  children: [
+                    _buildTopBar(isRunning),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                        child: Column(
+                          children: [
                             const SizedBox(height: 12),
-                          ],
-                          if (_isMiui || _isSamsung) ...[
-                            _buildOemWarning(),
-                            const SizedBox(height: 12),
-                          ],
-                          _buildResumeBanner(isRunning),
-                          if (!_batteryWarningDismissed) ...[
-                            _buildBatteryWarning(),
-                            const SizedBox(height: 12),
-                          ],
-                          _buildSpeedWarning(locState.position?.speed),
-                          if (_isRouteDeviated) ...[
-                            _buildRouteDeviationWarning(),
-                          ],
-                          if (!isRunning) _buildBusListSection(),
-                          if (isRunning) _buildSelectedBusSummary(),
-                          const SizedBox(height: 16),
-                          _buildModeCard(mode),
-                          if (isRunning) ...[
+                            if (_isOffline) ...[
+                              _buildOfflineBanner(),
+                              const SizedBox(height: 12),
+                            ],
+                            if (_isMiui || _isSamsung) ...[
+                              _buildOemWarning(),
+                              const SizedBox(height: 12),
+                            ],
+                            _buildResumeBanner(isRunning),
+                            if (!_batteryWarningDismissed) ...[
+                              _buildBatteryWarning(),
+                              const SizedBox(height: 12),
+                            ],
+                            _buildSpeedWarning(locState.position?.speed),
+                            if (!isRunning) _buildBusListSection(),
+                            if (isRunning) _buildSelectedBusSummary(),
                             const SizedBox(height: 16),
-                            _buildMiniMap(locState.position),
-                          ],
-                          const SizedBox(height: 16),
-                          _buildGpsStatsCard(locState, isRunning),
-                          if (isRunning) ...[
+                            _buildModeCard(mode),
+                            if (isRunning) ...[
+                              const SizedBox(height: 16),
+                              _buildMiniMap(locState.position),
+                            ],
                             const SizedBox(height: 16),
-                            _buildTripMetrics(locState, tripStartTime),
+                            _buildGpsStatsCard(locState, isRunning),
+                            if (isRunning) ...[
+                              const SizedBox(height: 16),
+                              _buildTripMetrics(locState, tripStartTime),
+                            ],
+                            const SizedBox(height: 16),
+                            _buildTripButton(isRunning),
+                            const SizedBox(height: 8),
+                            _buildServiceNote(),
                           ],
-                          const SizedBox(height: 16),
-                          _buildTripButton(isRunning),
-                          const SizedBox(height: 8),
-                          _buildServiceNote(),
-                        ],
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1241,7 +1176,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                   const Text(
                     'UniTrack',
                     style: TextStyle(
-                      fontFamily: 'DMSans',
+                      fontFamily: AppTextStyles.fontFamily,
                       fontSize: 22,
                       fontWeight: FontWeight.w800,
                       color: Colors.white,
@@ -1259,11 +1194,11 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                       height: 10,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: _isFirebaseConnected ? _green : _red,
+                        color: _isFirebaseConnected ? AppColors.activeGreen : AppColors.red,
                         boxShadow: [
                           BoxShadow(
-                            color: (_isFirebaseConnected ? _green : _red)
-                                .withOpacity(0.5),
+                            color: (_isFirebaseConnected ? AppColors.activeGreen : AppColors.red)
+                                .withValues(alpha: 0.5),
                             blurRadius: 4,
                             spreadRadius: 1,
                           ),
@@ -1276,7 +1211,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
               const Text(
                 'Driver Dashboard',
                 style: TextStyle(
-                  fontFamily: 'DMSans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 12,
                   color: Colors.white60,
                   letterSpacing: 0.3,
@@ -1307,7 +1242,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.15),
+                  color: Colors.white.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: Colors.white24),
                 ),
@@ -1326,7 +1261,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.15),
+                color: Colors.white.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: Colors.white24),
               ),
@@ -1348,7 +1283,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: _red,
+        color: AppColors.red,
         borderRadius: BorderRadius.circular(14),
       ),
       child: const Row(
@@ -1359,7 +1294,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
             child: Text(
               'No internet connection — showing cached data',
               style: TextStyle(
-                fontFamily: 'DMSans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
                 color: Colors.white,
@@ -1371,76 +1306,306 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
     );
   }
 
-  Widget _buildRouteDeviationWarning() {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+  Widget _buildOemWarning() {
+    final brand = _getOemName();
+    final extraStep = 'Tap here for setup instructions.';
+
+    return GestureDetector(
+      onTap: _showOemChecklistDialog,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: const Color(0xFFFEF2F2),
+          color: AppColors.amberSoft,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: _red.withOpacity(0.4)),
+          border: Border.all(color: AppColors.amber.withValues(alpha: 0.4)),
         ),
-        child: const Row(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.route_outlined, color: _red, size: 20),
-            SizedBox(width: 10),
+            const Icon(Icons.warning_amber_rounded, color: AppColors.amber, size: 20),
+            const SizedBox(width: 10),
             Expanded(
-              child: Text(
-                'Off route — you are more than 200m from the assigned route.',
-                style: TextStyle(
-                  fontFamily: 'DMSans',
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF991B1B),
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '$brand Detected',
+                    style: const TextStyle(
+                      fontFamily: AppTextStyles.fontFamily,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.amber,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    extraStep,
+                    style: const TextStyle(
+                      fontFamily: AppTextStyles.fontFamily,
+                      fontSize: 12,
+                      color: AppColors.amber,
+                      height: 1.5,
+                    ),
+                  ),
+                ],
               ),
-            ), // ← Expanded বন্ধ
-          ], // ← children: [ বন্ধ
-        ), // ← Row বন্ধ
-      ), // ← Container বন্ধ
-    ); // ← Padding বন্ধ
+            ),
+            const Icon(Icons.chevron_right, color: AppColors.amber, size: 20),
+          ],
+        ),
+      ),
+    );
   }
 
-  Widget _buildOemWarning() {
-    final brand = _isMiui ? 'Xiaomi / MIUI' : 'Samsung One UI';
-    final extraStep = _isMiui
-        ? 'Also enable "Autostart" in Security app → Manage Apps → UniTrack.'
-        : 'Also set "Sleeping apps" to never put UniTrack to sleep.';
+  Future<void> _openMiuiAutostartSettings() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final intent = AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        componentName:
+            'com.miui.securitycenter/com.miui.permcenter.autostart.AutoStartManagementActivity',
+        flags: <int>[Flag.FLAG_ACTIVITY_NEW_TASK],
+      );
+      debugPrint('UniTrack: Attempting to open MIUI Autostart (primary: AutoStartManagementActivity)');
+      await intent.launch();
+    } catch (e) {
+      debugPrint('UniTrack: Failed to open MIUI Autostart settings (primary attempt): $e');
+      // Fallback: some MIUI versions use a different activity path.
+      try {
+        final fallbackIntent = AndroidIntent(
+          action: 'miui.intent.action.APP_PERM_EDITOR',
+          componentName:
+              'com.miui.securitycenter/com.miui.permcenter.permissions.PermissionsEditorActivity',
+          arguments: <String, dynamic>{
+            'extra_pkgname': 'com.example.unitrack',
+          },
+          flags: <int>[Flag.FLAG_ACTIVITY_NEW_TASK],
+        );
+        debugPrint('UniTrack: Attempting to open MIUI Autostart (fallback: PermissionsEditorActivity)');
+        await fallbackIntent.launch();
+      } catch (e2) {
+        debugPrint('UniTrack: Failed to open MIUI Autostart settings (fallback): $e2');
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Please find UniTrack and enable Autostart manually in Security app → Permissions → Autostart.',
+            ),
+            backgroundColor: AppColors.amber,
+            action: SnackBarAction(
+              label: 'SETTINGS',
+              textColor: Colors.white,
+              onPressed: ph.openAppSettings,
+            ),
+          ),
+        );
+      }
+    }
+  }
 
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF3E0),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _amber.withOpacity(0.4)),
+  Future<void> _openOppoAutostartSettings() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final intent = AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        componentName:
+            'com.coloros.safecenter/.startupapp.StartupAppListActivity',
+        flags: <int>[Flag.FLAG_ACTIVITY_NEW_TASK],
+      );
+      debugPrint('UniTrack: Attempting to open Oppo/Realme Autostart');
+      await intent.launch();
+    } catch (e) {
+      debugPrint('UniTrack: Failed to open Oppo/Realme Autostart settings: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Please find UniTrack and enable Autostart manually in Security app → Startup apps.',
+          ),
+          backgroundColor: AppColors.amber,
+          action: SnackBarAction(
+            label: 'SETTINGS',
+            textColor: Colors.white,
+            onPressed: ph.openAppSettings,
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _openVivoAutostartSettings() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final intent = AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        componentName:
+            'com.vivo.permissionmanager/.activity.BgStartUpManagerActivity',
+        flags: <int>[Flag.FLAG_ACTIVITY_NEW_TASK],
+      );
+      debugPrint('UniTrack: Attempting to open Vivo Autostart');
+      await intent.launch();
+    } catch (e) {
+      debugPrint('UniTrack: Failed to open Vivo Autostart settings: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Please find UniTrack and enable Autostart manually in iManager → Permissions → Autostart.',
+          ),
+          backgroundColor: AppColors.amber,
+          action: SnackBarAction(
+            label: 'SETTINGS',
+            textColor: Colors.white,
+            onPressed: ph.openAppSettings,
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _openHuaweiAutostartSettings() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final intent = AndroidIntent(
+        action: 'android.intent.action.MAIN',
+        componentName:
+            'com.huawei.systemmanager/.startupmgr.ui.StartupNormalAppListActivity',
+        flags: <int>[Flag.FLAG_ACTIVITY_NEW_TASK],
+      );
+      debugPrint('UniTrack: Attempting to open Huawei Autostart');
+      await intent.launch();
+    } catch (e) {
+      debugPrint('UniTrack: Failed to open Huawei Autostart settings: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Please find UniTrack and enable Autostart manually in Phone Manager → Startup apps.',
+          ),
+          backgroundColor: AppColors.amber,
+          action: SnackBarAction(
+            label: 'SETTINGS',
+            textColor: Colors.white,
+            onPressed: ph.openAppSettings,
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _openOemSettings() async {
+    if (_isMiui) {
+      await _openMiuiAutostartSettings();
+    } else if (_isOppo) {
+      await _openOppoAutostartSettings();
+    } else if (_isVivo) {
+      await _openVivoAutostartSettings();
+    } else if (_isHuawei) {
+      await _openHuaweiAutostartSettings();
+    } else if (_isSamsung) {
+      await ph.openAppSettings();
+    }
+  }
+
+  String _getOemName() {
+    if (_isMiui) return 'Xiaomi / MIUI';
+    if (_isOppo) return 'Oppo / Realme / OnePlus';
+    if (_isVivo) return 'Vivo';
+    if (_isHuawei) return 'Huawei / Honor';
+    if (_isSamsung) return 'Samsung';
+    return 'Android';
+  }
+
+  Future<void> _showOemChecklistDialog() async {
+    final oemName = _getOemName();
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded, color: AppColors.amber),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '$oemName Detected',
+                style: const TextStyle(
+                  fontFamily: AppTextStyles.fontFamily,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'For uninterrupted background tracking, please enable these settings:',
+                style: TextStyle(
+                  fontFamily: AppTextStyles.fontFamily,
+                  fontSize: 13,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 16),
+              _buildChecklistItem('1. Autostart', 'Allow UniTrack to start in background'),
+              _buildChecklistItem('2. Battery Saver', 'Exclude UniTrack from battery optimization'),
+              _buildChecklistItem('3. Background popups', 'Allow background activity'),
+              _buildChecklistItem('4. Recent-apps lock', 'Lock UniTrack in recent apps'),
+              _buildExactAlarmChecklistItem(),
+              if (_isMiui)
+                _buildChecklistItem('6. MIUI Optimization', 'Disable MIUI optimization for UniTrack'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('LATER'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              await _openOemSettings();
+            },
+            child: const Text('OPEN SETTINGS'),
+          ),
+        ],
       ),
+    );
+  }
+
+  Widget _buildChecklistItem(String title, String description) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.warning_amber_rounded, color: _amber, size: 20),
-          const SizedBox(width: 10),
+          const Icon(Icons.check_circle_outline, color: AppColors.amber, size: 20),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '$brand Detected',
+                  title,
                   style: const TextStyle(
-                    fontFamily: 'DMSans',
+                    fontFamily: AppTextStyles.fontFamily,
                     fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF7B4F00),
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 Text(
-                  '$extraStep Grant all permissions for uninterrupted tracking.',
+                  description,
                   style: const TextStyle(
-                    fontFamily: 'DMSans',
-                    fontSize: 12,
-                    color: Color(0xFF7B4F00),
-                    height: 1.5,
+                    fontFamily: AppTextStyles.fontFamily,
+                    fontSize: 11,
+                    color: AppColors.textSecondary,
                   ),
                 ),
               ],
@@ -1451,25 +1616,122 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
     );
   }
 
+  Widget _buildExactAlarmChecklistItem() {
+    return FutureBuilder(
+      future: ph.Permission.scheduleExactAlarm.status,
+      builder: (context, snapshot) {
+        final status = snapshot.data;
+        final isGranted = status?.isGranted ?? false;
+        final statusText = isGranted ? 'Granted' : 'Not granted';
+        final statusColor = isGranted ? Colors.green : Colors.orange;
+
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                isGranted ? Icons.check_circle : Icons.warning_amber_rounded,
+                color: isGranted ? Colors.green : AppColors.amber,
+                size: 20,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          '5. Exact Alarms',
+                          style: const TextStyle(
+                            fontFamily: AppTextStyles.fontFamily,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          statusText,
+                          style: TextStyle(
+                            fontFamily: AppTextStyles.fontFamily,
+                            fontSize: 10,
+                            color: statusColor,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Allow precise timing for watchdog timer',
+                      style: const TextStyle(
+                        fontFamily: AppTextStyles.fontFamily,
+                        fontSize: 11,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                    if (!isGranted)
+                      TextButton(
+                        onPressed: () async {
+                          await ph.Permission.scheduleExactAlarm.request();
+                          if (mounted) setState(() {});
+                        },
+                        child: const Text(
+                          'Request Permission',
+                          style: TextStyle(
+                            fontFamily: AppTextStyles.fontFamily,
+                            fontSize: 11,
+                            color: AppColors.amber,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showOemDialogIfNeeded() async {
+    // Only show dialog for OEMs that need special handling
+    if (!(_isMiui || _isOppo || _isVivo || _isHuawei || _isSamsung)) return;
+    if (!mounted) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final dialogShown = prefs.getBool('oem_checklist_shown') ?? false;
+
+    if (!dialogShown) {
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (!mounted) return;
+      await _showOemChecklistDialog();
+      await prefs.setBool('oem_checklist_shown', true);
+    }
+  }
+
   Widget _buildBatteryWarning() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFFBEB),
+        color: AppColors.amberSoft,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _amber.withOpacity(0.4)),
+        border: Border.all(color: AppColors.amber.withValues(alpha: 0.4)),
       ),
       child: Row(
         children: [
-          const Icon(Icons.battery_alert_rounded, color: _amber, size: 20),
+          const Icon(Icons.battery_alert_rounded, color: AppColors.amber, size: 20),
           const SizedBox(width: 10),
           const Expanded(
             child: Text(
               'Disable battery optimization for UniTrack to keep tracking running in background.',
               style: TextStyle(
-                fontFamily: 'DMSans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: 12,
-                color: Color(0xFF92400E),
+                color: AppColors.amber,
               ),
             ),
           ),
@@ -1481,7 +1743,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                 setState(() => _batteryWarningDismissed = true);
               }
             },
-            child: const Icon(Icons.close_rounded, size: 16, color: _amber),
+            child: const Icon(Icons.close_rounded, size: 16, color: AppColors.amber),
           ),
         ],
       ),
@@ -1498,22 +1760,22 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
-          color: const Color(0xFFFEF2F2),
+          color: AppColors.redBg,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: _red.withOpacity(0.4)),
+          border: Border.all(color: AppColors.red.withValues(alpha: 0.4)),
         ),
         child: Row(
           children: [
-            const Icon(Icons.speed_rounded, color: _red, size: 20),
+            const Icon(Icons.speed_rounded, color: AppColors.red, size: 20),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
                 'Speed alert: ${kmh.toStringAsFixed(1)} km/h — limit is ${kSpeedLimitKmh.toInt()} km/h',
                 style: const TextStyle(
-                  fontFamily: 'DMSans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
-                  color: Color(0xFF991B1B),
+                  color: AppColors.red,
                 ),
               ),
             ),
@@ -1531,22 +1793,22 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
-          color: const Color(0xFFFFFBEB),
+          color: AppColors.amberSoft,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: _amber.withOpacity(0.5)),
+          border: Border.all(color: AppColors.amber.withValues(alpha: 0.5)),
         ),
         child: const Row(
           children: [
-            Icon(Icons.warning_amber_rounded, color: _amber, size: 20),
+            Icon(Icons.warning_amber_rounded, color: AppColors.amber, size: 20),
             SizedBox(width: 10),
             Expanded(
               child: Text(
                 'A trip is still running in the background. Tap Start Trip to resume tracking.',
                 style: TextStyle(
-                  fontFamily: 'DMSans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 12,
                   fontWeight: FontWeight.w500,
-                  color: Color(0xFF92400E),
+                  color: AppColors.amber,
                 ),
               ),
             ),
@@ -1568,10 +1830,10 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
           child: Text(
             'Select Your Bus',
             style: TextStyle(
-              fontFamily: 'DMSans',
+              fontFamily: AppTextStyles.fontFamily,
               fontSize: 16,
               fontWeight: FontWeight.w700,
-              color: _textPrimary,
+              color: AppColors.textPrimary,
             ),
           ),
         ),
@@ -1641,11 +1903,11 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: _cardBg,
+        color: AppColors.cardBg,
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: _navy.withOpacity(0.10),
+            color: AppColors.navy.withValues(alpha: 0.10),
             blurRadius: 20,
             offset: const Offset(0, 6),
           ),
@@ -1657,12 +1919,12 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
             width: 52,
             height: 52,
             decoration: BoxDecoration(
-              color: _navy.withOpacity(0.08),
+              color: AppColors.navy.withValues(alpha: 0.08),
               borderRadius: BorderRadius.circular(14),
             ),
             child: const Icon(
               Icons.directions_bus_rounded,
-              color: _navy,
+              color: AppColors.navy,
               size: 28,
             ),
           ),
@@ -1674,10 +1936,10 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                 Text(
                   name,
                   style: const TextStyle(
-                    fontFamily: 'DMSans',
+                    fontFamily: AppTextStyles.fontFamily,
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
-                    color: Color(0xFF111827),
+                    color: AppColors.textPrimary,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -1689,7 +1951,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                     Text(
                       route,
                       style: const TextStyle(
-                        fontFamily: 'DMSans',
+                        fontFamily: AppTextStyles.fontFamily,
                         fontSize: 13,
                         color: Colors.grey,
                       ),
@@ -1705,7 +1967,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
               opacity: _pulseAnim.value,
               child: const _StatusBadge(
                 label: 'LIVE',
-                color: _green,
+                color: AppColors.activeGreen,
               ),
             ),
           ),
@@ -1719,12 +1981,12 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
   Widget _buildSearchBar() {
     return Container(
       decoration: BoxDecoration(
-        color: _cardBg,
+        color: AppColors.cardBg,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _divider, width: 1.2),
+        border: Border.all(color: AppColors.divider, width: 1.2),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withValues(alpha: 0.04),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -1734,27 +1996,27 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
         controller: _searchCtrl,
         onChanged: (v) => setState(() => _searchQuery = v),
         style: const TextStyle(
-          fontFamily: 'DMSans',
+          fontFamily: AppTextStyles.fontFamily,
           fontSize: 15,
-          color: _textPrimary,
+          color: AppColors.textPrimary,
         ),
         decoration: InputDecoration(
           hintText: 'Search by bus name or route…',
           hintStyle: const TextStyle(
-            fontFamily: 'DMSans',
+            fontFamily: AppTextStyles.fontFamily,
             fontSize: 15,
-            color: _textMuted,
+            color: AppColors.textMuted,
           ),
           prefixIcon: const Icon(
             Icons.search_rounded,
-            color: _textMuted,
+            color: AppColors.textMuted,
             size: 20,
           ),
           suffixIcon: _searchQuery.isNotEmpty
               ? IconButton(
                   icon: const Icon(
                     Icons.close_rounded,
-                    color: _textMuted,
+                    color: AppColors.textMuted,
                     size: 18,
                   ),
                   onPressed: () {
@@ -1796,15 +2058,15 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.wifi_off_rounded, color: _red, size: 40),
+            const Icon(Icons.wifi_off_rounded, color: AppColors.red, size: 40),
             const SizedBox(height: 12),
             const Text(
               'Could not load buses',
               style: TextStyle(
-                fontFamily: 'DMSans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
-                color: _textPrimary,
+                color: AppColors.textPrimary,
               ),
             ),
             const SizedBox(height: 8),
@@ -1812,9 +2074,9 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
               e.toString(),
               textAlign: TextAlign.center,
               style: const TextStyle(
-                fontFamily: 'DMSans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: 12,
-                color: _textSecondary,
+                color: AppColors.textSecondary,
               ),
               maxLines: 3,
               overflow: TextOverflow.ellipsis,
@@ -1825,7 +2087,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
               children: [
                 ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: _navy,
+                    backgroundColor: AppColors.navy,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10),
                     ),
@@ -1838,14 +2100,14 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                       size: 18, color: Colors.white),
                   label: const Text(
                     'Retry',
-                    style: TextStyle(fontFamily: 'DMSans', color: Colors.white),
+                    style: TextStyle(fontFamily: AppTextStyles.fontFamily, color: Colors.white),
                   ),
                 ),
                 const SizedBox(width: 12),
                 OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: _navy,
-                    side: const BorderSide(color: _navy),
+                    foregroundColor: AppColors.navy,
+                    side: const BorderSide(color: AppColors.navy),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10),
                     ),
@@ -1870,7 +2132,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                   icon: const Icon(Icons.cloud_queue_rounded, size: 18),
                   label: const Text(
                     'Check Firebase',
-                    style: TextStyle(fontFamily: 'DMSans'),
+                    style: TextStyle(fontFamily: AppTextStyles.fontFamily),
                   ),
                 ),
               ],
@@ -1888,14 +2150,14 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         title: const Row(
           children: [
-            Icon(Icons.bug_report_rounded, color: _amber, size: 22),
+            Icon(Icons.bug_report_rounded, color: AppColors.amber, size: 22),
             SizedBox(width: 8),
             Text(
               'Firebase Debug',
               style: TextStyle(
-                fontFamily: 'DMSans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontWeight: FontWeight.w700,
-                color: _navy,
+                color: AppColors.navy,
               ),
             ),
           ],
@@ -1907,25 +2169,25 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
             Text(
               'Possible causes:',
               style: TextStyle(
-                fontFamily: 'DMSans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontWeight: FontWeight.w700,
-                color: _textPrimary,
+                color: AppColors.textPrimary,
               ),
             ),
             SizedBox(height: 8),
             Text('• Firebase not initialized',
-                style: TextStyle(fontFamily: 'DMSans', fontSize: 13)),
+                style: TextStyle(fontFamily: AppTextStyles.fontFamily, fontSize: 13)),
             Text('• Wrong database URL',
-                style: TextStyle(fontFamily: 'DMSans', fontSize: 13)),
+                style: TextStyle(fontFamily: AppTextStyles.fontFamily, fontSize: 13)),
             Text('• No read permission',
-                style: TextStyle(fontFamily: 'DMSans', fontSize: 13)),
+                style: TextStyle(fontFamily: AppTextStyles.fontFamily, fontSize: 13)),
             Text('• Database is empty',
-                style: TextStyle(fontFamily: 'DMSans', fontSize: 13)),
+                style: TextStyle(fontFamily: AppTextStyles.fontFamily, fontSize: 13)),
             SizedBox(height: 12),
             Text(
               'Check Firebase Console → Realtime Database → Rules',
               style: TextStyle(
-                  fontFamily: 'DMSans', fontSize: 12, color: Colors.grey),
+                  fontFamily: AppTextStyles.fontFamily, fontSize: 12, color: Colors.grey),
             ),
           ],
         ),
@@ -1935,7 +2197,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
             child: const Text(
               'OK',
               style:
-                  TextStyle(fontFamily: 'DMSans', fontWeight: FontWeight.w600),
+                  TextStyle(fontFamily: AppTextStyles.fontFamily, fontWeight: FontWeight.w600),
             ),
           ),
         ],
@@ -1950,15 +2212,15 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.search_off_rounded, color: _navy, size: 40),
+            const Icon(Icons.search_off_rounded, color: AppColors.navy, size: 40),
             const SizedBox(height: 12),
             const Text(
               'No buses found',
               style: TextStyle(
-                fontFamily: 'DMSans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
-                color: _textPrimary,
+                color: AppColors.textPrimary,
               ),
             ),
             const SizedBox(height: 8),
@@ -1966,9 +2228,9 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
               'Try a different name or route keyword.',
               textAlign: TextAlign.center,
               style: TextStyle(
-                fontFamily: 'DMSans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: 13,
-                color: _textSecondary,
+                color: AppColors.textSecondary,
               ),
             ),
             const SizedBox(height: 12),
@@ -1993,11 +2255,11 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: _cardBg,
+        color: AppColors.cardBg,
         borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-            color: color.withOpacity(0.12),
+            color: color.withValues(alpha: 0.12),
             blurRadius: 16,
             offset: const Offset(0, 4),
           ),
@@ -2009,7 +2271,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: color.withOpacity(0.12),
+              color: color.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(_modeIcon(mode), color: color, size: 22),
@@ -2024,9 +2286,9 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                     const Text(
                       'Tracking Mode',
                       style: TextStyle(
-                        fontFamily: 'DMSans',
+                        fontFamily: AppTextStyles.fontFamily,
                         fontSize: 12,
-                        color: _textSecondary,
+                        color: AppColors.textSecondary,
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -2036,13 +2298,13 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: color.withOpacity(0.12),
+                        color: color.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
                         _modeLabel(mode),
                         style: TextStyle(
-                          fontFamily: 'DMSans',
+                          fontFamily: AppTextStyles.fontFamily,
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
                           color: color,
@@ -2056,9 +2318,9 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                 Text(
                   _modeDescription(mode),
                   style: const TextStyle(
-                    fontFamily: 'DMSans',
+                    fontFamily: AppTextStyles.fontFamily,
                     fontSize: 12,
-                    color: Color(0xFF374151),
+                    color: AppColors.textSecondary,
                   ),
                 ),
               ],
@@ -2114,11 +2376,11 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
 
     return Container(
       decoration: BoxDecoration(
-        color: _cardBg,
+        color: AppColors.cardBg,
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: _navy.withOpacity(0.08),
+            color: AppColors.navy.withValues(alpha: 0.08),
             blurRadius: 20,
             offset: const Offset(0, 4),
           ),
@@ -2138,7 +2400,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: isRunning
-                          ? _green.withOpacity(_pulseAnim.value)
+                          ? AppColors.activeGreen.withValues(alpha: _pulseAnim.value)
                           : Colors.grey.shade300,
                     ),
                   ),
@@ -2147,10 +2409,10 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                 const Text(
                   'Live GPS Data',
                   style: TextStyle(
-                    fontFamily: 'DMSans',
+                    fontFamily: AppTextStyles.fontFamily,
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
-                    color: Color(0xFF111827),
+                    color: AppColors.textPrimary,
                   ),
                 ),
                 const Spacer(),
@@ -2158,7 +2420,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                   Text(
                     'Updated ${_timeAgo(lastUpdate)}',
                     style: TextStyle(
-                      fontFamily: 'DMSans',
+                      fontFamily: AppTextStyles.fontFamily,
                       fontSize: 11,
                       color: Colors.grey.shade400,
                     ),
@@ -2177,14 +2439,14 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                       icon: Icons.location_on_rounded,
                       label: 'Latitude',
                       value: _formatCoord(pos?.latitude, isLat: true),
-                      color: _navy,
+                      color: AppColors.navy,
                     ),
                     const SizedBox(width: 12),
                     _GpsStat(
                       icon: Icons.location_on_rounded,
                       label: 'Longitude',
                       value: _formatCoord(pos?.longitude, isLat: false),
-                      color: _navy,
+                      color: AppColors.navy,
                     ),
                   ],
                 ),
@@ -2195,7 +2457,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                       icon: Icons.speed_rounded,
                       label: 'Speed',
                       value: _formatSpeed(pos?.speed),
-                      color: const Color(0xFF8B5CF6),
+                      color: AppColors.statPurple,
                     ),
                     const SizedBox(width: 12),
                     _GpsStat(
@@ -2204,7 +2466,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                       value: pos != null
                           ? '±${pos.accuracy.toStringAsFixed(1)} m'
                           : '-- m',
-                      color: _amber,
+                      color: AppColors.amber,
                     ),
                   ],
                 ),
@@ -2217,7 +2479,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                       value: pos != null
                           ? '${pos.altitude.toStringAsFixed(1)} m'
                           : '-- m',
-                      color: const Color(0xFF059669),
+                      color: AppColors.statTeal,
                     ),
                     const SizedBox(width: 12),
                     _GpsStat(
@@ -2226,7 +2488,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                       value: pos != null
                           ? '${pos.heading.toStringAsFixed(0)}°'
                           : '--°',
-                      color: const Color(0xFFEC4899),
+                      color: AppColors.amber,
                     ),
                   ],
                 ),
@@ -2236,22 +2498,22 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                     padding:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
                     decoration: BoxDecoration(
-                      color: _navy.withOpacity(0.06),
+                      color: AppColors.navy.withValues(alpha: 0.06),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: _navy.withOpacity(0.12)),
+                      border: Border.all(color: AppColors.navy.withValues(alpha: 0.12)),
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.place_rounded, size: 14, color: _navy),
+                        const Icon(Icons.place_rounded, size: 14, color: AppColors.navy),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
                             _currentPlaceName,
                             style: const TextStyle(
-                              fontFamily: 'DMSans',
+                              fontFamily: AppTextStyles.fontFamily,
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
-                              color: _navy,
+                              color: AppColors.navy,
                             ),
                             overflow: TextOverflow.ellipsis,
                             maxLines: 2,
@@ -2278,7 +2540,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
             icon: Icons.update_rounded,
             label: 'GPS Pings',
             value: '${locState.totalUpdates}',
-            color: _navy,
+            color: AppColors.navy,
           ),
         ),
         const SizedBox(width: 12),
@@ -2287,7 +2549,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
             icon: Icons.straighten_rounded,
             label: 'Distance',
             value: _formatDistance(locState.totalDistanceM),
-            color: _green,
+            color: AppColors.activeGreen,
           ),
         ),
         const SizedBox(width: 12),
@@ -2296,7 +2558,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
             icon: Icons.timer_rounded,
             label: 'Uptime',
             value: _formatUptime(tripStartTime),
-            color: const Color(0xFF8B5CF6),
+            color: AppColors.statPurple,
           ),
         ),
       ],
@@ -2319,15 +2581,15 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: isRunning
-                ? [_red, const Color(0xFFC0392B)]
-                : [_navy, _navyLight],
+                ? [AppColors.red, AppColors.red]
+                : [AppColors.navy, AppColors.navyLight],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
           borderRadius: BorderRadius.circular(18),
           boxShadow: [
             BoxShadow(
-              color: (isRunning ? _red : _navy).withOpacity(0.35),
+              color: (isRunning ? AppColors.red : AppColors.navy).withValues(alpha: 0.35),
               blurRadius: 16,
               offset: const Offset(0, 6),
             ),
@@ -2357,10 +2619,10 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
                   const SizedBox(width: 10),
                   Text(
                     isRunning
-                        ? 'End Trip'
-                        : (canStart ? 'Start Trip' : 'Select a Bus First'),
+                            ? 'End Trip'
+                            : (canStart ? 'Start Trip' : 'Select a Bus First'),
                     style: const TextStyle(
-                      fontFamily: 'DMSans',
+                      fontFamily: AppTextStyles.fontFamily,
                       fontSize: 17,
                       fontWeight: FontWeight.w700,
                       color: Colors.white,
@@ -2388,7 +2650,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
           Text(
             'Background service active  •  Auto-starts on boot',
             style: TextStyle(
-              fontFamily: 'DMSans',
+              fontFamily: AppTextStyles.fontFamily,
               fontSize: 11,
               color: Colors.grey.shade400,
             ),
@@ -2418,26 +2680,26 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
         title: const Text(
           'Sign Out',
           style: TextStyle(
-            fontFamily: 'DMSans',
+            fontFamily: AppTextStyles.fontFamily,
             fontWeight: FontWeight.w700,
-            color: _navy,
+            color: AppColors.navy,
           ),
         ),
         content: const Text(
           'Are you sure you want to sign out?',
-          style: TextStyle(fontFamily: 'DMSans'),
+          style: TextStyle(fontFamily: AppTextStyles.fontFamily),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text(
               'Cancel',
-              style: TextStyle(fontFamily: 'DMSans', color: Colors.grey),
+              style: TextStyle(fontFamily: AppTextStyles.fontFamily, color: Colors.grey),
             ),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: _navy,
+              backgroundColor: AppColors.navy,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(10),
               ),
@@ -2470,7 +2732,7 @@ class _DriverDashScreenState extends ConsumerState<DriverDashScreen>
             },
             child: const Text(
               'Sign Out',
-              style: TextStyle(fontFamily: 'DMSans', color: Colors.white),
+              style: TextStyle(fontFamily: AppTextStyles.fontFamily, color: Colors.white),
             ),
           ),
         ],
@@ -2539,23 +2801,23 @@ class _BusCardState extends State<_BusCard>
               duration: const Duration(milliseconds: 220),
               curve: Curves.easeOutCubic,
               decoration: BoxDecoration(
-                color: widget.isSelected ? _navy : Colors.white,
+                color: widget.isSelected ? AppColors.navy : Colors.white,
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
-                  color: widget.isSelected ? _navy : _divider,
+                  color: widget.isSelected ? AppColors.navy : AppColors.divider,
                   width: widget.isSelected ? 1.5 : 1.2,
                 ),
                 boxShadow: widget.isSelected
                     ? [
                         BoxShadow(
-                          color: _navy.withOpacity(0.28),
+                          color: AppColors.navy.withValues(alpha: 0.28),
                           blurRadius: 18,
                           offset: const Offset(0, 6),
                         ),
                       ]
                     : [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.04),
+                          color: Colors.black.withValues(alpha: 0.04),
                           blurRadius: 8,
                           offset: const Offset(0, 2),
                         ),
@@ -2573,13 +2835,13 @@ class _BusCardState extends State<_BusCard>
                         height: 48,
                         decoration: BoxDecoration(
                           color: widget.isSelected
-                              ? Colors.white.withOpacity(0.15)
-                              : _navyGlow,
+                              ? Colors.white.withValues(alpha: 0.15)
+                              : AppColors.navyGlow,
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Icon(
                           Icons.directions_bus_filled_rounded,
-                          color: widget.isSelected ? Colors.white : _navy,
+                          color: widget.isSelected ? Colors.white : AppColors.navy,
                           size: 24,
                         ),
                       ),
@@ -2594,12 +2856,12 @@ class _BusCardState extends State<_BusCard>
                                   child: Text(
                                     widget.bus.name,
                                     style: TextStyle(
-                                      fontFamily: 'DMSans',
+                                      fontFamily: AppTextStyles.fontFamily,
                                       fontSize: 15,
                                       fontWeight: FontWeight.w700,
                                       color: widget.isSelected
                                           ? Colors.white
-                                          : _textPrimary,
+                                          : AppColors.textPrimary,
                                     ),
                                     overflow: TextOverflow.ellipsis,
                                   ),
@@ -2618,19 +2880,19 @@ class _BusCardState extends State<_BusCard>
                                   Icons.route_rounded,
                                   size: 13,
                                   color: widget.isSelected
-                                      ? Colors.white.withOpacity(0.7)
-                                      : _textMuted,
+                                      ? Colors.white.withValues(alpha: 0.7)
+                                      : AppColors.textMuted,
                                 ),
                                 const SizedBox(width: 4),
                                 Expanded(
                                   child: Text(
                                     widget.bus.route,
                                     style: TextStyle(
-                                      fontFamily: 'DMSans',
+                                      fontFamily: AppTextStyles.fontFamily,
                                       fontSize: 13,
                                       color: widget.isSelected
-                                          ? Colors.white.withOpacity(0.75)
-                                          : _textSecondary,
+                                          ? Colors.white.withValues(alpha: 0.75)
+                                          : AppColors.textSecondary,
                                     ),
                                     overflow: TextOverflow.ellipsis,
                                   ),
@@ -2646,18 +2908,18 @@ class _BusCardState extends State<_BusCard>
                                     Icons.person_outline_rounded,
                                     size: 13,
                                     color: widget.isSelected
-                                        ? Colors.white.withOpacity(0.6)
-                                        : _textMuted,
+                                        ? Colors.white.withValues(alpha: 0.6)
+                                        : AppColors.textMuted,
                                   ),
                                   const SizedBox(width: 4),
                                   Text(
                                     widget.bus.driverName!,
                                     style: TextStyle(
-                                      fontFamily: 'DMSans',
+                                      fontFamily: AppTextStyles.fontFamily,
                                       fontSize: 12,
                                       color: widget.isSelected
-                                          ? Colors.white.withOpacity(0.65)
-                                          : _textMuted,
+                                          ? Colors.white.withValues(alpha: 0.65)
+                                          : AppColors.textMuted,
                                     ),
                                   ),
                                 ],
@@ -2679,7 +2941,7 @@ class _BusCardState extends State<_BusCard>
                           border: Border.all(
                             color: widget.isSelected
                                 ? Colors.white
-                                : _textMuted.withOpacity(0.5),
+                                : AppColors.textMuted.withValues(alpha: 0.5),
                             width: 2,
                           ),
                         ),
@@ -2690,7 +2952,7 @@ class _BusCardState extends State<_BusCard>
                                   height: 10,
                                   decoration: const BoxDecoration(
                                     shape: BoxShape.circle,
-                                    color: _navy,
+                                    color: AppColors.navy,
                                   ),
                                 ),
                               )
@@ -2720,11 +2982,11 @@ class _StatusDot extends StatelessWidget {
       decoration: BoxDecoration(
         color: active
             ? (selected
-                ? Colors.white.withOpacity(0.15)
-                : const Color(0xFFDCFCE7))
+                ? Colors.white.withValues(alpha: 0.15)
+                : AppColors.greenBg)
             : (selected
-                ? Colors.white.withOpacity(0.1)
-                : const Color(0xFFF1F5F9)),
+                ? Colors.white.withValues(alpha: 0.1)
+                : AppColors.surface),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
@@ -2736,20 +2998,20 @@ class _StatusDot extends StatelessWidget {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: active
-                  ? (selected ? Colors.greenAccent : _green)
-                  : (selected ? Colors.white.withOpacity(0.4) : _textMuted),
+                  ? (selected ? Colors.greenAccent : AppColors.activeGreen)
+                  : (selected ? Colors.white.withValues(alpha: 0.4) : AppColors.textMuted),
             ),
           ),
           const SizedBox(width: 4),
           Text(
             active ? 'Active' : 'Inactive',
             style: TextStyle(
-              fontFamily: 'DMSans',
+              fontFamily: AppTextStyles.fontFamily,
               fontSize: 11,
               fontWeight: FontWeight.w600,
               color: active
-                  ? (selected ? Colors.greenAccent : _green)
-                  : (selected ? Colors.white.withOpacity(0.5) : _textMuted),
+                  ? (selected ? Colors.greenAccent : AppColors.activeGreen)
+                  : (selected ? Colors.white.withValues(alpha: 0.5) : AppColors.textMuted),
             ),
           ),
         ],
@@ -2770,10 +3032,10 @@ class _SectionLabel extends StatelessWidget {
         Text(
           label,
           style: const TextStyle(
-            fontFamily: 'DMSans',
+            fontFamily: AppTextStyles.fontFamily,
             fontSize: 12,
             fontWeight: FontWeight.w700,
-            color: _textMuted,
+            color: AppColors.textMuted,
             letterSpacing: 0.8,
           ),
         ),
@@ -2781,16 +3043,16 @@ class _SectionLabel extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
           decoration: BoxDecoration(
-            color: _divider,
+            color: AppColors.divider,
             borderRadius: BorderRadius.circular(20),
           ),
           child: Text(
             '$count',
             style: const TextStyle(
-              fontFamily: 'DMSans',
+              fontFamily: AppTextStyles.fontFamily,
               fontSize: 11,
               fontWeight: FontWeight.w600,
-              color: _textSecondary,
+              color: AppColors.textSecondary,
             ),
           ),
         ),
@@ -2810,7 +3072,7 @@ class _SkeletonLine extends StatelessWidget {
       width: width,
       height: height,
       decoration: BoxDecoration(
-        color: const Color(0xFFE2E8F0),
+        color: AppColors.border,
         borderRadius: BorderRadius.circular(6),
       ),
     );
@@ -2852,8 +3114,8 @@ class _SkeletonCardState extends State<_SkeletonCard>
       animation: _shimmer,
       builder: (_, __) {
         final shimmerColor = Color.lerp(
-          const Color(0xFFE2E8F0),
-          const Color(0xFFF1F5F9),
+          AppColors.border,
+          AppColors.surface,
           _shimmer.value,
         )!;
         return Padding(
@@ -2882,9 +3144,9 @@ class _StatusBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -2898,7 +3160,7 @@ class _StatusBadge extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-              fontFamily: 'DMSans',
+              fontFamily: AppTextStyles.fontFamily,
               fontSize: 11,
               fontWeight: FontWeight.w700,
               color: color,
@@ -2930,9 +3192,9 @@ class _GpsStat extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.06),
+          color: color.withValues(alpha: 0.06),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withOpacity(0.12)),
+          border: Border.all(color: color.withValues(alpha: 0.12)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -2944,9 +3206,9 @@ class _GpsStat extends StatelessWidget {
                 Text(
                   label,
                   style: TextStyle(
-                    fontFamily: 'DMSans',
+                    fontFamily: AppTextStyles.fontFamily,
                     fontSize: 11,
-                    color: color.withOpacity(0.7),
+                    color: color.withValues(alpha: 0.7),
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -2956,7 +3218,7 @@ class _GpsStat extends StatelessWidget {
             Text(
               value,
               style: TextStyle(
-                fontFamily: 'DMSans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: 13,
                 fontWeight: FontWeight.w700,
                 color: color,
@@ -2992,7 +3254,7 @@ class _MetricTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: color.withOpacity(0.10),
+            color: color.withValues(alpha: 0.10),
             blurRadius: 12,
             offset: const Offset(0, 3),
           ),
@@ -3005,7 +3267,7 @@ class _MetricTile extends StatelessWidget {
           Text(
             value,
             style: TextStyle(
-              fontFamily: 'DMSans',
+              fontFamily: AppTextStyles.fontFamily,
               fontSize: 15,
               fontWeight: FontWeight.w800,
               color: color,
@@ -3015,7 +3277,7 @@ class _MetricTile extends StatelessWidget {
           Text(
             label,
             style: const TextStyle(
-              fontFamily: 'DMSans',
+              fontFamily: AppTextStyles.fontFamily,
               fontSize: 10,
               color: Colors.grey,
             ),
@@ -3047,7 +3309,7 @@ class _SummaryRow extends StatelessWidget {
           width: 36,
           height: 36,
           decoration: BoxDecoration(
-            color: color.withOpacity(0.10),
+            color: color.withValues(alpha: 0.10),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(icon, color: color, size: 18),
@@ -3057,7 +3319,7 @@ class _SummaryRow extends StatelessWidget {
           child: Text(
             label,
             style: const TextStyle(
-              fontFamily: 'DMSans',
+              fontFamily: AppTextStyles.fontFamily,
               fontSize: 13,
               color: Colors.grey,
             ),
@@ -3066,7 +3328,7 @@ class _SummaryRow extends StatelessWidget {
         Text(
           value,
           style: TextStyle(
-            fontFamily: 'DMSans',
+            fontFamily: AppTextStyles.fontFamily,
             fontSize: 14,
             fontWeight: FontWeight.w700,
             color: color,
@@ -3117,7 +3379,7 @@ class _LiveClockState extends State<_LiveClock> {
         Text(
           DateFormat('hh:mm:ss a').format(_now),
           style: const TextStyle(
-            fontFamily: 'DMSans',
+            fontFamily: AppTextStyles.fontFamily,
             fontSize: 13,
             fontWeight: FontWeight.w600,
             color: Colors.white,
@@ -3126,7 +3388,7 @@ class _LiveClockState extends State<_LiveClock> {
         Text(
           DateFormat('EEE, dd MMM').format(_now),
           style: const TextStyle(
-            fontFamily: 'DMSans',
+            fontFamily: AppTextStyles.fontFamily,
             fontSize: 11,
             color: Colors.white54,
           ),

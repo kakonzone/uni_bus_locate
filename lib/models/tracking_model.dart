@@ -1,10 +1,25 @@
-import 'dart:async';
 import 'package:geolocator/geolocator.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 enum TrackingMode { active, lowPower, sleep }
 
 enum TripStatus { idle, running, paused }
+
+/// How a bus location is sourced (phone GPS vs dedicated GPS device).
+enum BusTrackMode {
+  phoneGps,
+  gpsDevice;
+
+  static BusTrackMode fromFirebase(dynamic value) {
+    final raw = value?.toString().toLowerCase() ?? '';
+    if (raw == 'gps_device' || raw == 'gps') return BusTrackMode.gpsDevice;
+    return BusTrackMode.phoneGps;
+  }
+
+  String get firebaseValue =>
+      this == BusTrackMode.gpsDevice ? 'gps_device' : 'phone_gps';
+
+  bool get isGpsDevice => this == BusTrackMode.gpsDevice;
+}
 
 class LiveLocationState {
   final Position? position;
@@ -31,56 +46,5 @@ class LiveLocationState {
       totalUpdates: totalUpdates ?? this.totalUpdates,
       totalDistanceM: totalDistanceM ?? this.totalDistanceM,
     );
-  }
-}
-
-class LiveLocationNotifier extends StateNotifier<LiveLocationState> {
-  LiveLocationNotifier() : super(const LiveLocationState());
-
-  StreamSubscription<Position>? _sub;
-
-  void startListening(TrackingMode mode) {
-    _sub?.cancel();
-    final distanceFilter = switch (mode) {
-      TrackingMode.active => 5,
-      TrackingMode.lowPower => 20,
-      TrackingMode.sleep => 50,
-    };
-    final settings = LocationSettings(
-      accuracy: mode == TrackingMode.active
-          ? LocationAccuracy.high
-          : LocationAccuracy.medium,
-      distanceFilter: distanceFilter,
-    );
-    _sub =
-        Geolocator.getPositionStream(locationSettings: settings).listen((pos) {
-      final prev = state.position;
-      double added = 0.0;
-      if (prev != null) {
-        added = Geolocator.distanceBetween(
-          prev.latitude,
-          prev.longitude,
-          pos.latitude,
-          pos.longitude,
-        );
-      }
-      state = state.copyWith(
-        position: pos,
-        lastUpdate: DateTime.now(),
-        totalUpdates: state.totalUpdates + 1,
-        totalDistanceM: state.totalDistanceM + added,
-      );
-    });
-  }
-
-  void stopListening() {
-    _sub?.cancel();
-    _sub = null;
-  }
-
-  @override
-  void dispose() {
-    _sub?.cancel();
-    super.dispose();
   }
 }

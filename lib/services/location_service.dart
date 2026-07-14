@@ -2,7 +2,6 @@
 // UniTrack — GPS Handler & Geofence Logic
 // Handles: adaptive GPS intervals, movement filtering, power modes, geofencing
 import 'dart:async';
-import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -237,17 +236,17 @@ class LocationService {
     required double lng2,
     required double radiusMeters,
   }) {
-    return _haversineDistance(lat1, lng1, lat2, lng2) <= radiusMeters;
+    return Geolocator.distanceBetween(lat1, lng1, lat2, lng2) <= radiusMeters;
   }
 
-  /// Calculate distance in meters between two coordinates (Haversine).
+  /// Calculate distance in meters between two coordinates.
   static double distanceBetween(
     double lat1,
     double lng1,
     double lat2,
     double lng2,
   ) {
-    return _haversineDistance(lat1, lng1, lat2, lng2);
+    return Geolocator.distanceBetween(lat1, lng1, lat2, lng2);
   }
 
   /// Estimate ETA in minutes given current speed and remaining distance.
@@ -374,7 +373,7 @@ class LocationService {
     final last = _lastWrittenLocation;
     if (last == null) return true;
 
-    final dist = _haversineDistance(
+    final dist = Geolocator.distanceBetween(
       last.latitude,
       last.longitude,
       location.latitude,
@@ -389,7 +388,7 @@ class LocationService {
 
   void _evaluateGeofences(LocationData location) {
     for (final zone in _registeredZones) {
-      final distance = _haversineDistance(
+      final distance = Geolocator.distanceBetween(
         location.latitude,
         location.longitude,
         zone.centerLat,
@@ -453,25 +452,6 @@ class LocationService {
     );
   }
 
-  /// Haversine formula — returns distance in meters.
-  static double _haversineDistance(
-    double lat1,
-    double lng1,
-    double lat2,
-    double lng2,
-  ) {
-    const earthRadiusM = 6371000.0;
-    final dLat = _deg2rad(lat2 - lat1);
-    final dLng = _deg2rad(lng2 - lng1);
-    final a = sin(dLat / 2) * sin(dLat / 2) +
-        cos(_deg2rad(lat1)) *
-            cos(_deg2rad(lat2)) *
-            sin(dLng / 2) *
-            sin(dLng / 2);
-    return earthRadiusM * 2 * atan2(sqrt(a), sqrt(1 - a));
-  }
-
-  static double _deg2rad(double deg) => deg * (pi / 180.0);
 
   // ─────────────────────────────────────────────
   // PERMISSIONS

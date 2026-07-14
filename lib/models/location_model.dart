@@ -1,6 +1,4 @@
-// lib/models/location_model.dart
-
-import 'dart:math' as math;
+import 'package:geolocator/geolocator.dart';
 
 class LocationModel {
   final double lat;
@@ -54,15 +52,16 @@ class LocationModel {
 
   // ─── Distance calculation ──────────────────────────────────────────────────
 
-  /// Returns the Haversine distance in **metres** between this location and
-  /// [other].  Used by the background service to decide whether to write a
-  /// new Firebase update (only when distance > 5 m).
-  double distanceTo(LocationModel other) =>
-      _haversine(lat, lng, other.lat, other.lng);
+  double distanceTo(LocationModel other) => Geolocator.distanceBetween(
+        lat,
+        lng,
+        other.lat,
+        other.lng,
+      );
 
   /// Convenience overload that accepts raw coordinates.
   double distanceToCoords(double otherLat, double otherLng) =>
-      _haversine(lat, lng, otherLat, otherLng);
+      Geolocator.distanceBetween(lat, lng, otherLat, otherLng);
 
   /// Rough ETA string to a destination given current speed.
   /// Returns null when the bus is stationary or speed data is unavailable.
@@ -89,12 +88,7 @@ class LocationModel {
       accuracy: _toDouble(map['accuracy']),
       heading: _toDouble(map['heading']),
       altitude: _toDouble(map['altitude']),
-      timestamp: map['timestamp'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(
-              (map['timestamp'] as int),
-              isUtc: true,
-            )
-          : DateTime.now().toUtc(),
+      timestamp: _toDateTime(map['timestamp']) ?? DateTime.now().toUtc(),
     );
   }
 
@@ -176,16 +170,29 @@ class LocationModel {
   // ─── Equality ──────────────────────────────────────────────────────────────
 
   @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is LocationModel &&
-          runtimeType == other.runtimeType &&
-          lat == other.lat &&
-          lng == other.lng &&
-          timestamp == other.timestamp;
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is LocationModel &&
+        runtimeType == other.runtimeType &&
+        lat == other.lat &&
+        lng == other.lng &&
+        speed == other.speed &&
+        accuracy == other.accuracy &&
+        heading == other.heading &&
+        altitude == other.altitude &&
+        timestamp == other.timestamp;
+  }
 
   @override
-  int get hashCode => Object.hash(lat, lng, timestamp);
+  int get hashCode => Object.hash(
+        lat,
+        lng,
+        speed,
+        accuracy,
+        heading,
+        altitude,
+        timestamp,
+      );
 
   @override
   String toString() =>
@@ -195,22 +202,23 @@ class LocationModel {
 
   // ─── Private utils ─────────────────────────────────────────────────────────
 
-  /// Haversine formula — returns distance in **metres**.
-  static double _haversine(double lat1, double lon1, double lat2, double lon2) {
-    const r = 6371000.0; // Earth radius in metres
-    final dLat = _rad(lat2 - lat1);
-    final dLon = _rad(lon2 - lon1);
-    final a =
-        math.sin(dLat / 2) * math.sin(dLat / 2) +
-        math.cos(_rad(lat1)) *
-            math.cos(_rad(lat2)) *
-            math.sin(dLon / 2) *
-            math.sin(dLon / 2);
-    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
-    return r * c;
+  static DateTime? _toDateTime(dynamic value) {
+    if (value == null) return null;
+    if (value is DateTime) return value.toUtc();
+    if (value is int) {
+      return DateTime.fromMillisecondsSinceEpoch(value, isUtc: true);
+    }
+    if (value is double) {
+      return DateTime.fromMillisecondsSinceEpoch(value.round(), isUtc: true);
+    }
+    if (value is String) {
+      final parsed = int.tryParse(value);
+      if (parsed != null) {
+        return DateTime.fromMillisecondsSinceEpoch(parsed, isUtc: true);
+      }
+    }
+    return null;
   }
-
-  static double _rad(double deg) => deg * math.pi / 180.0;
 
   static double _toDouble(dynamic value) {
     if (value == null) return 0.0;

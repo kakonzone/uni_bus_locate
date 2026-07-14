@@ -1,9 +1,10 @@
 // lib/models/stoppage_model.dart
-// UniTrack — Stoppage Model with Haversine distance + ETA calculation
+// UniTrack — Stoppage Model with Geolocator distance + ETA calculation
 // FIXED: Replaced google_maps_flutter LatLng → latlong2 LatLng
+// FIXED: Replaced Haversine with Geolocator.distanceBetween
 
 import 'package:latlong2/latlong.dart'; // ✅ FIXED
-import 'dart:math' as math;
+import 'package:geolocator/geolocator.dart';
 
 class Stoppage {
   final String id;
@@ -26,17 +27,15 @@ class Stoppage {
 
   LatLng get position => LatLng(lat, lng); // ✅ latlong2 LatLng
 
-  /// Haversine distance in km from this stop to the bus position
+  /// Distance in km from this stop to the bus position using Geolocator
   double distanceTo(LatLng busPos) {
-    const r = 6371.0;
-    final dLat = (busPos.latitude - lat) * math.pi / 180;
-    final dLon = (busPos.longitude - lng) * math.pi / 180;
-    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
-        math.cos(lat * math.pi / 180) *
-            math.cos(busPos.latitude * math.pi / 180) *
-            math.sin(dLon / 2) *
-            math.sin(dLon / 2);
-    return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+    final distanceInMeters = Geolocator.distanceBetween(
+      lat,
+      lng,
+      busPos.latitude,
+      busPos.longitude,
+    );
+    return distanceInMeters / 1000.0; // Convert to km
   }
 
   /// Returns ETA in minutes. Returns null if bus is stationary (speed < 2 km/h)
@@ -48,14 +47,26 @@ class Stoppage {
   // ─── Firebase serialisation ────────────────────────────────────────────────
 
   factory Stoppage.fromMap(String id, Map<String, dynamic> map) {
-    return Stoppage(
-      id: id,
-      name: (map['name'] as String?) ?? id,
-      lat: (map['lat'] as num).toDouble(),
-      lng: (map['lng'] as num).toDouble(),
-      orderIndex: (map['orderIndex'] as int?) ?? 0,
-      notifyRadiusKm: (map['notifyRadiusKm'] as num?)?.toDouble() ?? 0.8,
-    );
+    try {
+      return Stoppage(
+        id: id,
+        name: (map['name'] as String?) ?? id,
+        lat: (map['lat'] as num).toDouble(),
+        lng: (map['lng'] as num).toDouble(),
+        orderIndex: (map['orderIndex'] as int?) ?? 0,
+        notifyRadiusKm: (map['notifyRadiusKm'] as num?)?.toDouble() ?? 0.8,
+      );
+    } catch (e) {
+      // Return default stoppage if parsing fails
+      return Stoppage(
+        id: id,
+        name: id,
+        lat: 0.0,
+        lng: 0.0,
+        orderIndex: 0,
+        notifyRadiusKm: 0.8,
+      );
+    }
   }
 
   Map<String, dynamic> toMap() => {

@@ -212,9 +212,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       final cred = await _auth.signInAnonymously();
       final uid = cred.user!.uid;
 
-      // Role নির্ধারণ
-      final role = isDriver ? UserRole.driver : UserRole.student;
-      // (student/teacher পরে RoleSelectScreen থেকে set হবে)
+      // Role is set below in state; student/teacher pick role on next screen.
 
       // SharedPreferences এ session save
       final prefs = await SharedPreferences.getInstance();

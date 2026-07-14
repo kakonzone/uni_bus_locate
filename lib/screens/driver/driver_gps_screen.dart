@@ -5,25 +5,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:firebase_database/firebase_database.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../../firebase_options.dart';
+
 import '../../services/firebase_globals.dart';
+import '../../theme/app_color.dart';
+import '../../theme/app_text_styles.dart';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-
-const _kNavy = Color(0xFF1B2CC1);
-const _kNavyLight = Color(0xFF3D52E6);
-const _kNavyDark = Color(0xFF1220A0);
-const _kGreen = Color(0xFF22C55E);
-const _kGreenBg = Color(0xFFDCFCE7);
-const _kRed = Color(0xFFEF4444);
-const _kRedBg = Color(0xFFFEE2E2);
-const _kGrayText = Color(0xFF6B7280);
-const _kBorder = Color(0xFFE5E7EB);
-const _kCardBg = Color(0xFFF8F9FF);
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -336,7 +325,7 @@ class _DriverGpsScreenState extends ConsumerState<DriverGpsScreen>
 
   PreferredSizeWidget _buildAppBar(BuildContext context) {
     return AppBar(
-      backgroundColor: _kNavy,
+      backgroundColor: AppColors.navy,
       foregroundColor: Colors.white,
       elevation: 0,
       leading: IconButton(
@@ -346,7 +335,7 @@ class _DriverGpsScreenState extends ConsumerState<DriverGpsScreen>
       title: const Text(
         'GPS Device Setup',
         style: TextStyle(
-          fontFamily: 'DM Sans',
+          fontFamily: AppTextStyles.fontFamily,
           fontWeight: FontWeight.w600,
           fontSize: 18,
           color: Colors.white,
@@ -357,7 +346,7 @@ class _DriverGpsScreenState extends ConsumerState<DriverGpsScreen>
       flexibleSpace: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [_kNavyDark, _kNavy],
+            colors: [AppColors.navyDark, AppColors.navy],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -401,12 +390,12 @@ class _QrScannerPageState extends State<_QrScannerPage> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        backgroundColor: _kNavy,
+        backgroundColor: AppColors.navy,
         foregroundColor: Colors.white,
         title: const Text(
           'Scan Device QR Code',
           style: TextStyle(
-            fontFamily: 'DM Sans',
+            fontFamily: AppTextStyles.fontFamily,
             fontWeight: FontWeight.w600,
             fontSize: 17,
           ),
@@ -436,7 +425,7 @@ class _QrScannerPageState extends State<_QrScannerPage> {
               width: 240,
               height: 240,
               decoration: BoxDecoration(
-                border: Border.all(color: _kNavyLight, width: 2.5),
+                border: Border.all(color: AppColors.navyLight, width: 2.5),
                 borderRadius: BorderRadius.circular(16),
               ),
             ),
@@ -457,7 +446,7 @@ class _QrScannerPageState extends State<_QrScannerPage> {
                 child: const Text(
                   'Point camera at the device QR label',
                   style: TextStyle(
-                    fontFamily: 'DM Sans',
+                    fontFamily: AppTextStyles.fontFamily,
                     fontSize: 13,
                     color: Colors.white,
                     fontWeight: FontWeight.w500,
@@ -487,7 +476,7 @@ class _DeviceIllustration extends StatelessWidget {
       height: 160,
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFFEEF2FF), Color(0xFFE0E7FF)],
+          colors: [AppColors.navySoft, AppColors.navySoft],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -506,7 +495,7 @@ class _DeviceIllustration extends StatelessWidget {
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     border: Border.all(
-                      color: _kNavy.withValues(alpha: 0.15 - i * 0.04), // FIX 6
+                      color: AppColors.navy.withValues(alpha: 0.15 - i * 0.04), // FIX 6
                       width: 1.5,
                     ),
                   ),
@@ -542,15 +531,15 @@ class _DeviceIllustration extends StatelessWidget {
   }
 
   Color _iconBg(_ValidationState v) {
-    if (v == _ValidationState.valid) return _kGreenBg;
-    if (v == _ValidationState.invalid) return _kRedBg;
+    if (v == _ValidationState.valid) return AppColors.greenBg;
+    if (v == _ValidationState.invalid) return AppColors.redBg;
     return Colors.white;
   }
 
   Color _iconColor(_ValidationState v) {
-    if (v == _ValidationState.valid) return _kGreen;
-    if (v == _ValidationState.invalid) return _kRed;
-    return _kNavy;
+    if (v == _ValidationState.valid) return AppColors.green;
+    if (v == _ValidationState.invalid) return AppColors.red;
+    return AppColors.navy;
   }
 
   IconData _icon(_ValidationState v) {
@@ -570,16 +559,16 @@ class _StatusPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (label, bg, fg) = switch (state.validation) {
-      _ValidationState.valid => ('Connected', _kGreenBg, _kGreen),
-      _ValidationState.invalid => ('Not Found', _kRedBg, _kRed),
+      _ValidationState.valid => ('Connected', AppColors.greenBg, AppColors.green),
+      _ValidationState.invalid => ('Not Found', AppColors.redBg, AppColors.red),
       _ValidationState.checking => (
           'Checking…',
-          const Color(0xFFFEF3C7),
-          const Color(0xFFD97706),
+          AppColors.amberSoft,
+          AppColors.amber,
         ),
       _ValidationState.idle => state.isSaved
-          ? ('Saved', _kGreenBg, _kGreen)
-          : ('Not Set', _kCardBg, _kGrayText),
+          ? ('Saved', AppColors.greenBg, AppColors.green)
+          : ('Not Set', AppColors.pageBg, AppColors.labelGray),
     };
 
     return Container(
@@ -601,7 +590,7 @@ class _StatusPill extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-              fontFamily: 'DM Sans',
+              fontFamily: AppTextStyles.fontFamily,
               fontSize: 11,
               fontWeight: FontWeight.w600,
               color: fg,
@@ -628,10 +617,10 @@ class _SectionHeader extends StatelessWidget {
         Text(
           title,
           style: const TextStyle(
-            fontFamily: 'DM Sans',
+            fontFamily: AppTextStyles.fontFamily,
             fontSize: 22,
             fontWeight: FontWeight.w700,
-            color: Color(0xFF111827),
+            color: AppColors.textPrimary,
             letterSpacing: -0.3,
           ),
         ),
@@ -639,9 +628,9 @@ class _SectionHeader extends StatelessWidget {
         Text(
           subtitle,
           style: const TextStyle(
-            fontFamily: 'DM Sans',
+            fontFamily: AppTextStyles.fontFamily,
             fontSize: 13.5,
-            color: _kGrayText,
+            color: AppColors.labelGray,
             height: 1.5,
           ),
         ),
@@ -662,9 +651,9 @@ class _SupportedDevicesRow extends StatelessWidget {
         const Text(
           'Supported devices:',
           style: TextStyle(
-            fontFamily: 'DM Sans',
+            fontFamily: AppTextStyles.fontFamily,
             fontSize: 12,
-            color: _kGrayText,
+            color: AppColors.labelGray,
             fontWeight: FontWeight.w500,
           ),
         ),
@@ -688,17 +677,17 @@ class _DeviceChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
       decoration: BoxDecoration(
-        color: const Color(0xFFEEF2FF),
+        color: AppColors.navySurface,
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: _kNavy.withValues(alpha: 0.15)), // FIX 6
+        border: Border.all(color: AppColors.navy.withValues(alpha: 0.15)), // FIX 6
       ),
       child: Text(
         label,
         style: const TextStyle(
-          fontFamily: 'DM Sans',
+          fontFamily: AppTextStyles.fontFamily,
           fontSize: 11,
           fontWeight: FontWeight.w600,
-          color: _kNavy,
+          color: AppColors.navy,
           letterSpacing: 0.2,
         ),
       ),
@@ -726,10 +715,10 @@ class _DeviceIdField extends StatelessWidget {
 
   Color get _borderColor {
     return switch (state.validation) {
-      _ValidationState.valid => _kGreen,
-      _ValidationState.invalid => _kRed,
-      _ValidationState.checking => _kNavyLight,
-      _ValidationState.idle => _kBorder,
+      _ValidationState.valid => AppColors.green,
+      _ValidationState.invalid => AppColors.red,
+      _ValidationState.checking => AppColors.navyLight,
+      _ValidationState.idle => AppColors.border,
     };
   }
 
@@ -742,28 +731,28 @@ class _DeviceIdField extends StatelessWidget {
         const Text(
           'Device IMEI / ID',
           style: TextStyle(
-            fontFamily: 'DM Sans',
+            fontFamily: AppTextStyles.fontFamily,
             fontSize: 13,
             fontWeight: FontWeight.w600,
-            color: Color(0xFF374151),
+            color: AppColors.textSecondary,
           ),
         ),
         const SizedBox(height: 8),
         AnimatedContainer(
           duration: const Duration(milliseconds: 250),
           decoration: BoxDecoration(
-            color: _kCardBg,
+            color: AppColors.pageBg,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: _borderColor, width: 1.8),
             boxShadow: state.validation == _ValidationState.valid
                 ? [
                     BoxShadow(
-                        color: _kGreen.withValues(alpha: 0.12), blurRadius: 10)
+                        color: AppColors.green.withValues(alpha: 0.12), blurRadius: 10)
                   ] // FIX 6
                 : state.validation == _ValidationState.invalid
                     ? [
                         BoxShadow(
-                            color: _kRed.withValues(alpha: 0.10),
+                            color: AppColors.red.withValues(alpha: 0.10),
                             blurRadius: 10) // FIX 6
                       ]
                     : [],
@@ -779,24 +768,24 @@ class _DeviceIdField extends StatelessWidget {
               LengthLimitingTextInputFormatter(30),
             ],
             style: const TextStyle(
-              fontFamily: 'DM Sans',
+              fontFamily: AppTextStyles.fontFamily,
               fontSize: 16,
               fontWeight: FontWeight.w600,
               letterSpacing: 1.2,
-              color: Color(0xFF111827),
+              color: AppColors.textPrimary,
             ),
             decoration: InputDecoration(
               hintText: 'e.g. GT06N-123456789',
               hintStyle: const TextStyle(
-                fontFamily: 'DM Sans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: 14,
-                color: Color(0xFFBFC6D9),
+                color: AppColors.border,
                 fontWeight: FontWeight.w400,
                 letterSpacing: 0.5,
               ),
               prefixIcon: const Padding(
                 padding: EdgeInsets.only(left: 14, right: 10),
-                child: Icon(Icons.router_rounded, color: _kNavy, size: 22),
+                child: Icon(Icons.router_rounded, color: AppColors.navy, size: 22),
               ),
               prefixIconConstraints: const BoxConstraints(),
               // ── FIX 3: QR icon in suffix (stacks with status icon) ──
@@ -821,7 +810,7 @@ class _DeviceIdField extends StatelessWidget {
         child: SizedBox(
           width: 20,
           height: 20,
-          child: CircularProgressIndicator(strokeWidth: 2.2, color: _kNavy),
+          child: CircularProgressIndicator(strokeWidth: 2.2, color: AppColors.navy),
         ),
       );
     }
@@ -837,7 +826,7 @@ class _DeviceIdField extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: Icon(
               Icons.qr_code_scanner_rounded,
-              color: _kNavy.withValues(alpha: 0.7), // FIX 6
+              color: AppColors.navy.withValues(alpha: 0.7), // FIX 6
               size: 22,
             ),
           ),
@@ -846,12 +835,12 @@ class _DeviceIdField extends StatelessWidget {
         if (v == _ValidationState.valid)
           const Padding(
             padding: EdgeInsets.only(right: 14),
-            child: Icon(Icons.check_circle_rounded, color: _kGreen, size: 22),
+            child: Icon(Icons.check_circle_rounded, color: AppColors.green, size: 22),
           )
         else if (v == _ValidationState.invalid)
           const Padding(
             padding: EdgeInsets.only(right: 14),
-            child: Icon(Icons.cancel_rounded, color: _kRed, size: 22),
+            child: Icon(Icons.cancel_rounded, color: AppColors.red, size: 22),
           )
         else
           const SizedBox(width: 6),
@@ -877,9 +866,9 @@ class _FieldHint extends StatelessWidget {
       child: Text(
         'Find IMEI printed on device label or dial *#06# on SIM phone.',
         style: TextStyle(
-          fontFamily: 'DM Sans',
+          fontFamily: AppTextStyles.fontFamily,
           fontSize: 11.5,
-          color: _kGrayText,
+          color: AppColors.labelGray,
         ),
       ),
     );
@@ -909,11 +898,11 @@ class _VerifyButton extends StatelessWidget {
         child: ElevatedButton(
           onPressed: _enabled ? onTap : null,
           style: ElevatedButton.styleFrom(
-            backgroundColor: _kNavy,
-            disabledBackgroundColor: _kNavy,
+            backgroundColor: AppColors.navy,
+            disabledBackgroundColor: AppColors.navy,
             foregroundColor: Colors.white,
             elevation: _enabled ? 3 : 0,
-            shadowColor: _kNavy.withValues(alpha: 0.4), // FIX 6
+            shadowColor: AppColors.navy.withValues(alpha: 0.4), // FIX 6
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(14),
             ),
@@ -934,7 +923,7 @@ class _VerifyButton extends StatelessWidget {
                 const Text(
                   'Verifying Device…',
                   style: TextStyle(
-                    fontFamily: 'DM Sans',
+                    fontFamily: AppTextStyles.fontFamily,
                     fontWeight: FontWeight.w600,
                     fontSize: 15,
                   ),
@@ -945,7 +934,7 @@ class _VerifyButton extends StatelessWidget {
                 const Text(
                   'Verify & Connect Device',
                   style: TextStyle(
-                    fontFamily: 'DM Sans',
+                    fontFamily: AppTextStyles.fontFamily,
                     fontWeight: FontWeight.w600,
                     fontSize: 15,
                   ),
@@ -971,16 +960,16 @@ class _SuccessBanner extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       margin: const EdgeInsets.only(bottom: 4),
       decoration: BoxDecoration(
-        color: _kGreenBg,
+        color: AppColors.greenBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _kGreen.withValues(alpha: 0.35)), // FIX 6
+        border: Border.all(color: AppColors.green.withValues(alpha: 0.35)), // FIX 6
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Icon(
             Icons.check_circle_outline_rounded,
-            color: _kGreen,
+            color: AppColors.green,
             size: 20,
           ),
           const SizedBox(width: 10),
@@ -991,19 +980,19 @@ class _SuccessBanner extends StatelessWidget {
                 const Text(
                   'Device Connected Successfully',
                   style: TextStyle(
-                    fontFamily: 'DM Sans',
+                    fontFamily: AppTextStyles.fontFamily,
                     fontSize: 13.5,
                     fontWeight: FontWeight.w700,
-                    color: Color(0xFF14532D),
+                    color: AppColors.greenDark,
                   ),
                 ),
                 const SizedBox(height: 3),
                 Text(
                   'Device ID "$deviceId" is active and broadcasting. You can now proceed to select a bus route.',
                   style: const TextStyle(
-                    fontFamily: 'DM Sans',
+                    fontFamily: AppTextStyles.fontFamily,
                     fontSize: 12,
-                    color: Color(0xFF166534),
+                    color: AppColors.activeGreen,
                     height: 1.4,
                   ),
                 ),
@@ -1028,22 +1017,22 @@ class _ErrorBanner extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       margin: const EdgeInsets.only(bottom: 4),
       decoration: BoxDecoration(
-        color: _kRedBg,
+        color: AppColors.redBg,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _kRed.withValues(alpha: 0.35)), // FIX 6
+        border: Border.all(color: AppColors.red.withValues(alpha: 0.35)), // FIX 6
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.error_outline_rounded, color: _kRed, size: 20),
+          const Icon(Icons.error_outline_rounded, color: AppColors.red, size: 20),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               message,
               style: const TextStyle(
-                fontFamily: 'DM Sans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: 12.5,
-                color: Color(0xFF7F1D1D),
+                color: AppColors.redDark,
                 height: 1.5,
               ),
             ),
@@ -1064,9 +1053,9 @@ class _HowItWorksCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: _kCardBg,
+        color: AppColors.pageBg,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _kBorder),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1076,12 +1065,12 @@ class _HowItWorksCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(7),
                 decoration: BoxDecoration(
-                  color: _kNavy.withValues(alpha: 0.1), // FIX 6
+                  color: AppColors.navy.withValues(alpha: 0.1), // FIX 6
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: const Icon(
                   Icons.lightbulb_outline_rounded,
-                  color: _kNavy,
+                  color: AppColors.navy,
                   size: 16,
                 ),
               ),
@@ -1089,10 +1078,10 @@ class _HowItWorksCard extends StatelessWidget {
               const Text(
                 'How GPS Hardware Mode Works',
                 style: TextStyle(
-                  fontFamily: 'DM Sans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
-                  color: Color(0xFF1F2937),
+                  color: AppColors.textPrimary,
                 ),
               ),
             ],
@@ -1133,10 +1122,10 @@ class _HowItWorksCard extends StatelessWidget {
                     width: 28,
                     height: 28,
                     decoration: BoxDecoration(
-                      color: _kNavy.withValues(alpha: 0.08), // FIX 6
+                      color: AppColors.navy.withValues(alpha: 0.08), // FIX 6
                       borderRadius: BorderRadius.circular(7),
                     ),
-                    child: Icon(item.$1, color: _kNavy, size: 15), // FIX 7
+                    child: Icon(item.$1, color: AppColors.navy, size: 15), // FIX 7
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -1146,18 +1135,18 @@ class _HowItWorksCard extends StatelessWidget {
                         Text(
                           item.$2, // FIX 7
                           style: const TextStyle(
-                            fontFamily: 'DM Sans',
+                            fontFamily: AppTextStyles.fontFamily,
                             fontSize: 12.5,
                             fontWeight: FontWeight.w600,
-                            color: Color(0xFF1F2937),
+                            color: AppColors.textPrimary,
                           ),
                         ),
                         Text(
                           item.$3, // FIX 7
                           style: const TextStyle(
-                            fontFamily: 'DM Sans',
+                            fontFamily: AppTextStyles.fontFamily,
                             fontSize: 11.5,
-                            color: _kGrayText,
+                            color: AppColors.labelGray,
                             height: 1.4,
                           ),
                         ),
@@ -1188,10 +1177,10 @@ class _ContinueButton extends StatelessWidget {
       child: ElevatedButton(
         onPressed: onTap,
         style: ElevatedButton.styleFrom(
-          backgroundColor: _kGreen,
+          backgroundColor: AppColors.green,
           foregroundColor: Colors.white,
           elevation: 2,
-          shadowColor: _kGreen.withValues(alpha: 0.4), // FIX 6
+          shadowColor: AppColors.green.withValues(alpha: 0.4), // FIX 6
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
           ),
@@ -1204,7 +1193,7 @@ class _ContinueButton extends StatelessWidget {
             Text(
               'Continue to Bus Selection',
               style: TextStyle(
-                fontFamily: 'DM Sans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontWeight: FontWeight.w700,
                 fontSize: 15,
               ),
@@ -1232,14 +1221,14 @@ class _ClearLink extends StatelessWidget {
         icon: const Icon(
           Icons.delete_outline_rounded,
           size: 16,
-          color: _kGrayText,
+          color: AppColors.labelGray,
         ),
         label: const Text(
           'Clear saved device',
           style: TextStyle(
-            fontFamily: 'DM Sans',
+            fontFamily: AppTextStyles.fontFamily,
             fontSize: 13,
-            color: _kGrayText,
+            color: AppColors.labelGray,
             fontWeight: FontWeight.w500,
           ),
         ),

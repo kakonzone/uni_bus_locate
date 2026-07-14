@@ -8,11 +8,12 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
-import 'dart:math' as math;
 import '../models/bus_model.dart';
 import '../services/firebase_globals.dart';
 import '../models/stoppage_model.dart';
+import '../utils/retry.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Connection state provider
@@ -49,7 +50,11 @@ List<BusModel> _parseBuses(DataSnapshot snapshot) {
         entry.key as String,
         Map<String, dynamic>.from(busData),
       ));
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint(
+        'UniTrack [bus_providers]: Skipping malformed bus "${entry.key}" → $e',
+      );
+      debugPrint('$st');
       continue;
     }
   }
@@ -66,7 +71,6 @@ final busesListProvider = StreamProvider<List<BusModel>>((ref) {
   StreamSubscription<DatabaseEvent>? subscription;
   bool isDisposed = false;
   int retryCount = 0;
-  const int maxRetries = 3;
   Timer? retryTimer;
 
   void subscribe() {
@@ -83,12 +87,12 @@ final busesListProvider = StreamProvider<List<BusModel>>((ref) {
         if (isDisposed) return;
         debugPrint('UniTrack [bus_providers]: Firebase error → $error');
 
-        if (retryCount < maxRetries) {
+        if (retryCount < defaultStreamRetryConfig.maxRetries) {
           retryCount++;
           debugPrint(
-              'UniTrack [bus_providers]: Retrying ($retryCount/$maxRetries)...');
+              'UniTrack [bus_providers]: Retrying ($retryCount/${defaultStreamRetryConfig.maxRetries})...');
           retryTimer?.cancel();
-          retryTimer = Timer(const Duration(seconds: 2), subscribe);
+          retryTimer = Timer(defaultStreamRetryConfig.retryDelay, subscribe);
         }
 
         if (!controller.isClosed) {
@@ -249,7 +253,12 @@ final stoppagesProvider =
             entry.key as String,
             Map<String, dynamic>.from(entry.value as Map),
           ));
-        } catch (_) {
+        } catch (e, st) {
+          debugPrint(
+            'UniTrack [stoppagesProvider]: Skipping malformed stoppage '
+            '"${entry.key}" for $busId → $e',
+          );
+          debugPrint('$st');
           continue;
         }
       }
@@ -288,7 +297,11 @@ final routesListProvider = StreamProvider<List<RouteModel>>((ref) {
           entry.key as String,
           Map<String, dynamic>.from(entry.value as Map),
         ));
-      } catch (e) {
+      } catch (e, st) {
+        debugPrint(
+          'UniTrack [routesListProvider]: Skipping malformed route "${entry.key}" → $e',
+        );
+        debugPrint('$st');
         continue;
       }
     }
@@ -345,18 +358,12 @@ final distanceToBusProvider = Provider.family<double?, String>((ref, busId) {
     if (bus == null || userLocation == null) return null;
     if (bus.lat == 0.0 && bus.lng == 0.0) return null;
 
-    const earthRadius = 6371.0;
-    final dLat = (bus.lat - userLocation.latitude) * math.pi / 180;
-    final dLon =
-        (bus.lng - userLocation.longitude) * math.pi / 180; // ✅ .longitude
-
-    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
-        math.cos(userLocation.latitude * math.pi / 180) *
-            math.cos(bus.lat * math.pi / 180) *
-            math.sin(dLon / 2) *
-            math.sin(dLon / 2);
-
-    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
-    return earthRadius * c; // km
+    return Geolocator.distanceBetween(
+          userLocation.latitude,
+          userLocation.longitude,
+          bus.lat,
+          bus.lng,
+        ) /
+        1000.0;
   });
 });

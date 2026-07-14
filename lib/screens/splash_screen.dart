@@ -9,6 +9,8 @@ import 'login/login_screen.dart';
 import 'driver/driver_dash_screen.dart';
 import 'student/student_home_screen.dart' show StudentHomeScreen;
 import '../models/user_model.dart';
+import '../theme/app_color.dart';
+import '../theme/app_text_styles.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SplashScreen
@@ -30,9 +32,9 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
   late final Animation<Offset> _taglineSlide;
   late final Animation<double> _dotOpacity;
 
-  // ── splash এ local colors (main.dart AppColors দিয়ে conflict এড়াতে) ──────
-  static const _primary = Color(0xFF1B2CC1);
-  static const _accent = Color(0xFF00C853);
+  // ── splash colors from canonical theme ─────────────────────────────────────
+  static const _primary = AppColors.navy;
+  static const _accent = AppColors.accent;
 
   @override
   void initState() {
@@ -174,7 +176,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                       child: const Text(
                         'UniTrack',
                         style: TextStyle(
-                          fontFamily: 'DM Sans',
+                          fontFamily: AppTextStyles.fontFamily,
                           fontSize: 38,
                           fontWeight: FontWeight.w800,
                           color: Colors.white,
@@ -193,7 +195,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                         child: const Text(
                           'University Bus Live Tracking',
                           style: TextStyle(
-                            fontFamily: 'DM Sans',
+                            fontFamily: AppTextStyles.fontFamily,
                             fontSize: 15,
                             fontWeight: FontWeight.w400,
                             color: Colors.white70,
@@ -221,7 +223,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                       Text(
                         'v1.0.0',
                         style: TextStyle(
-                          fontFamily: 'DM Sans',
+                          fontFamily: AppTextStyles.fontFamily,
                           fontSize: 12,
                           color: Colors.white38,
                           letterSpacing: 1.2,
@@ -258,7 +260,7 @@ class _LogoMark extends StatelessWidget {
         borderRadius: BorderRadius.circular(28),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.18),
+            color: Colors.black.withValues(alpha: 0.18),
             blurRadius: 32,
             offset: const Offset(0, 12),
           ),
@@ -437,7 +439,7 @@ class _PatternPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final circlePaint = Paint()
-      ..color = Colors.white.withOpacity(0.04)
+      ..color = Colors.white.withValues(alpha: 0.04)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.2;
 
@@ -450,7 +452,7 @@ class _PatternPainter extends CustomPainter {
     }
 
     final dotPaint = Paint()
-      ..color = Colors.white.withOpacity(0.07)
+      ..color = Colors.white.withValues(alpha: 0.07)
       ..style = PaintingStyle.fill;
 
     for (var row = 0; row < 6; row++) {

@@ -6,6 +6,9 @@ import 'dart:collection';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+
+import '../../theme/app_color.dart';
+import '../../theme/app_text_styles.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geocoding/geocoding.dart';
@@ -13,7 +16,6 @@ import 'package:intl/intl.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import '../../services/firebase_globals.dart';
 import '../../models/bus_model.dart';
 import '../../providers/bus_providers.dart';
 import '../../services/location_cache_service.dart';
@@ -21,27 +23,12 @@ import '../../models/stoppage_model.dart';
 import '../../services/stoppage_notification_service.dart';
 import 'package:latlong2/latlong.dart' as ll;
 
-class _C {
-  static const navy = Color(0xFF1B2CC1);
-  static const navyDark = Color(0xFF1323A8);
-  static const navyLight = Color(0xFF2E3FD4);
-  static const navySurface = Color(0xFFEEF0FD);
-  static const green = Color(0xFF18C967);
-  static const amber = Color(0xFFF59E0B);
-  static const amberSoft = Color(0xFFFFF8E6);
-  static const textPrimary = Color(0xFF0D1137);
-  static const textSecondary = Color(0xFF6B7280);
-  static const textMuted = Color(0xFFADB5BD);
-  static const cardBg = Color(0xFFFFFFFF);
-  static const divider = Color(0xFFE8EAF6);
-}
-
 class LiveMapScreen extends ConsumerStatefulWidget {
-  final String busId;
+  final String? busId;
 
   const LiveMapScreen({
     super.key,
-    required this.busId,
+    this.busId,
   });
 
   @override
@@ -69,8 +56,10 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
   // Google Maps state
   Set<Marker> _markers = {};
 
-  // STEP 1: Replaced 5 old fields with single _busPin
-  BitmapDescriptor? _busPin;
+  // Custom bus icon cache (pre-generated per bus color)
+  final Map<String, BitmapDescriptor> _busIconCache = {};
+
+  // Stop flag icon for stoppage markers
   BitmapDescriptor? _stopFlagIcon;
 
   MapType _mapType = MapType.normal;
@@ -78,6 +67,9 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
   // GPS noise filter
   DateTime? _lastGpsUpdate;
   LatLng? _lastValidPos;
+
+  // Track timing of bus updates for smooth marker animation
+  DateTime? _lastBusUpdateReceivedAt;
 
   bool _isOffline = false;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
@@ -130,17 +122,22 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
 
     _startConnectivityMonitoring();
 
-    // STEP 2: Load bus pin after first frame
+    // STEP 2: Load stop flag icon and pre-generate custom bus icons after first frame
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final pin = await _buildBusPin();
-      if (mounted) setState(() => _busPin = pin);
+      await _preloadBusIcons();
       final flag = await _buildStopFlag();
-      if (mounted) setState(() => _stopFlagIcon = flag);
-      // FIX 2: Re-trigger overlay update once icons finish loading so any
-      // bus data that arrived before icons were ready gets rendered properly.
       if (mounted) {
-        final bus = ref.read(busDetailProvider(widget.busId)).valueOrNull;
-        if (bus != null) _updateMapOverlays(bus);
+        setState(() => _stopFlagIcon = flag);
+        // Re-trigger overlay update once icons finish loading so any
+        // bus data that arrived before icons were ready gets rendered properly.
+        if (widget.busId != null) {
+          final bus = ref.read(busDetailProvider(widget.busId!)).valueOrNull;
+          if (bus != null) _updateMapOverlays(bus);
+        }
+        // For all-buses mode, trigger a rebuild to refresh markers with custom icons
+        if (widget.busId == null) {
+          setState(() {});
+        }
       }
     });
   }
@@ -178,110 +175,6 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
     super.dispose();
   }
 
-  // STEP 4: New canvas-drawn pin — no rotation, no asset, no cache
-  Future<BitmapDescriptor> _buildBusPin() async {
-    // Canvas size
-    const double W = 56.0;
-    const double H = 72.0;
-
-    // Pin geometry
-    const double cx = W / 2; // center x = 28
-    const double r = 22.0; // circle radius
-    const double cy = r + 5; // circle center y = 27
-    const double tipY = H - 5; // pin tip y = 67
-
-    // Tangent angle calculation
-    // Triangle: right angle at T (tangent point), hypotenuse = D, one leg = r
-    // angle at O (center) → cos(∠O) = r/D → alpha = acos(r/D) ✅
-    final double D = tipY - cy; // = 40
-    final double alpha = math.acos(r / D); // angle at circle center
-
-    // Angles where the straight lines meet the circle
-    final double leftJoinAngle = math.pi / 2 + alpha;
-    final double rightJoinAngle = math.pi / 2 - alpha;
-
-    // Arc sweep: CW from left join → over the top → right join
-    final double sweepAngle = 2 * (math.pi - alpha);
-
-    // Join points coordinates
-    final double lx = cx + r * math.cos(leftJoinAngle);
-    final double ly = cy + r * math.sin(leftJoinAngle);
-
-    // ── Draw ──────────────────────────────────────────
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-
-    // 1. Drop shadow
-    final shadowPath = Path();
-    shadowPath.moveTo(cx + 2, tipY + 2);
-    shadowPath.lineTo(lx + 2, ly + 2);
-    shadowPath.arcTo(
-      Rect.fromCircle(center: Offset(cx + 2, cy + 2), radius: r),
-      leftJoinAngle,
-      sweepAngle,
-      false,
-    );
-    shadowPath.lineTo(cx + 2, tipY + 2);
-    shadowPath.close();
-
-    canvas.drawPath(
-      shadowPath,
-      Paint()
-        ..color = Colors.black.withOpacity(0.22)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
-    );
-
-    // 2. Red pin body
-    final pinPath = Path();
-    pinPath.moveTo(cx, tipY); // tip (bottom point)
-    pinPath.lineTo(lx, ly); // left side line up to circle
-
-    // Arc: over the top of the circle
-    pinPath.arcTo(
-      Rect.fromCircle(center: Offset(cx, cy), radius: r),
-      leftJoinAngle,
-      sweepAngle, // positive = CW → goes over the top
-      false,
-    );
-
-    pinPath.lineTo(cx, tipY); // right side line back to tip
-    pinPath.close();
-
-    canvas.drawPath(
-      pinPath,
-      Paint()
-        ..color = const Color(0xFFE53935) // red
-        ..style = PaintingStyle.fill,
-    );
-
-    // 3. Slight highlight on top-left of circle (depth effect)
-    canvas.drawArc(
-      Rect.fromCircle(center: Offset(cx - 3, cy - 3), radius: r * 0.72),
-      math.pi * 1.1,
-      math.pi * 0.65,
-      false,
-      Paint()
-        ..color = Colors.white.withOpacity(0.18)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3.5
-        ..strokeCap = StrokeCap.round,
-    );
-
-    // 4. White circle hole in the middle
-    canvas.drawCircle(
-      Offset(cx, cy),
-      r * 0.415, // ≈ 9.1px
-      Paint()..color = Colors.white,
-    );
-
-    // ── Convert to BitmapDescriptor ───────────────────
-    final picture = recorder.endRecording();
-    final image = await picture.toImage(W.toInt(), H.toInt());
-    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-
-    return BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
-  }
-
   Future<BitmapDescriptor> _buildStopFlag() async {
     const double W = 48.0, H = 72.0;
     const double cx = W / 2; // 24
@@ -300,7 +193,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
       Rect.fromCenter(
           center: Offset(cx + 1, poleBottom + 3), width: 14, height: 5),
       Paint()
-        ..color = Colors.black.withOpacity(0.18)
+        ..color = Colors.black.withValues(alpha: 0.18)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
     );
 
@@ -312,7 +205,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
     // Pole gradient — left lighter, right darker for depth
     canvas.drawRRect(
       poleRect,
-      Paint()..color = const Color(0xFFF5A623),
+      Paint()..color = AppColors.amber,
     );
     // Highlight strip on left edge of pole
     canvas.drawRRect(
@@ -321,7 +214,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
             poleX - poleW / 2, poleTop, poleW * 0.35, poleBottom - poleTop),
         const Radius.circular(2.5),
       ),
-      Paint()..color = Colors.white.withOpacity(0.25),
+      Paint()..color = Colors.white.withValues(alpha: 0.25),
     );
 
     // ── 3. Octagon path ───────────────────────────────
@@ -345,20 +238,20 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
     canvas.drawPath(
       _octagon(cx + 1.5, signCY + 1.5, signR),
       Paint()
-        ..color = Colors.black.withOpacity(0.22)
+        ..color = Colors.black.withValues(alpha: 0.22)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
     );
 
     // Dark border ring
     canvas.drawPath(
       _octagon(cx, signCY, signR),
-      Paint()..color = const Color(0xFF1A1A1A),
+      Paint()..color = Colors.black,
     );
 
     // Red fill
     canvas.drawPath(
       _octagon(cx, signCY, signR - 2),
-      Paint()..color = const Color(0xFFD32F2F),
+      Paint()..color = AppColors.red,
     );
 
     // White inner border
@@ -470,6 +363,13 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
 
   double _toRad(double deg) => deg * math.pi / 180;
 
+  int _maxAnimClampMs() {
+    final h = DateTime.now().hour;
+    if (h >= 7 && h < 18) return 4000;   // active mode — matches ~3s write interval
+    if (h >= 18 && h < 22) return 15000; // lowPower mode — matches ~30s write interval, capped below 30s so it doesn't feel sluggish
+    return 20000; // sleep mode — GPS mostly paused, updates are rare; allow a longer glide
+  }
+
   String _formatTime(int? ms) {
     if (ms == null) return '—';
     final d = DateTime.fromMillisecondsSinceEpoch(ms);
@@ -550,19 +450,32 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
           ),
         );
         if (mounted) setState(() => _following = true);
+        _lastBusUpdateReceivedAt = now;
       }
 
-      LocationCacheService.savePosition(widget.busId, bus.lat, bus.lng);
+      if (widget.busId != null) {
+        LocationCacheService.savePosition(widget.busId!, bus.lat, bus.lng);
+      }
 
       // Smooth marker animation from current animated pos to new pos
       if (_lastBusPos != null) {
+        // Compute elapsed time since last update for dynamic animation duration
+        final elapsedMs = _lastBusUpdateReceivedAt != null
+            ? now.difference(_lastBusUpdateReceivedAt!).inMilliseconds
+            : 900; // Default 900ms for first animation
+        // Clamp to reasonable range to handle GPS glitches
+        final animDurationMs = elapsedMs.clamp(500, _maxAnimClampMs());
+        _markerAnimCtrl.duration = Duration(milliseconds: animDurationMs);
+        
         // FIX: If animation is running, start from current animated position
         final startPos = _animatedBusPos ?? _lastBusPos!;
         _markerAnimCtrl.stop();
         _markerAnimCtrl.reset();
         _markerPosAnim = LatLngTween(begin: startPos, end: newPos).animate(
-            CurvedAnimation(parent: _markerAnimCtrl, curve: Curves.easeInOut));
+            CurvedAnimation(parent: _markerAnimCtrl, curve: Curves.linear));
         _markerAnimCtrl.forward();
+        
+        _lastBusUpdateReceivedAt = now;
       }
       _lastBusPos = newPos;
       _animatedBusPos ??= newPos;
@@ -580,15 +493,17 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
 
       await _updateMapOverlays(bus);
 
-      final stoppages =
-          ref.read(stoppagesProvider(widget.busId)).valueOrNull ?? [];
-      if (stoppages.isNotEmpty) {
-        stoppageNotificationService.checkAndNotify(
-          busId: widget.busId,
-          busPos: ll.LatLng(newPos.latitude, newPos.longitude),
-          speedKmh: bus.speed,
-          stoppages: stoppages,
-        );
+      if (widget.busId != null) {
+        final stoppages =
+            ref.read(stoppagesProvider(widget.busId!)).valueOrNull ?? [];
+        if (stoppages.isNotEmpty) {
+          stoppageNotificationService.checkAndNotify(
+            busId: widget.busId!,
+            busPos: ll.LatLng(newPos.latitude, newPos.longitude),
+            speedKmh: bus.speed,
+            stoppages: stoppages,
+          );
+        }
       }
 
       if (_following && _mapLoaded && _mapCtrl != null) {
@@ -605,26 +520,39 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
     }
   }
 
-  // STEP 6: Simple marker — no rotation, uses canvas-drawn pin
+  // STEP 6: Simple marker — no rotation, uses custom canvas-drawn pin with color tint
   Future<void> _updateMapOverlays(BusModel bus) async {
-    // FIX 2: Bus pin and stop flag are loaded asynchronously after the first
-    // frame. If `onMapCreated` (or any other caller) invokes this before the
-    // icons finish decoding, bail out — `initState`'s post-frame callback
-    // re-invokes us once the icons are ready.
-    if (_busPin == null || _stopFlagIcon == null) {
+    // Stop flag icon is loaded asynchronously after the first frame.
+    // If `onMapCreated` (or any other caller) invokes this before the
+    // icon finishes decoding, bail out — `initState`'s post-frame callback
+    // re-invokes us once the icon is ready.
+    if (_stopFlagIcon == null) {
       debugPrint(
-          'UniTrack: _updateMapOverlays skipped — icons not loaded yet (busPin=${_busPin != null}, stopFlag=${_stopFlagIcon != null}).');
+          'UniTrack: _updateMapOverlays skipped — stopFlag icon not loaded yet.');
       return;
     }
 
     final displayPos = _animatedBusPos ?? LatLng(bus.lat, bus.lng);
 
-    // Simple marker — no rotation, canvas-drawn pin
+    // Use cached custom icon if available, otherwise generate on-demand for single-bus view
+    BitmapDescriptor busIcon = _busIconCache[bus.busId] ??
+        _busIconCache['default'] ??
+        BitmapDescriptor.defaultMarker;
+
+    // If icon not cached yet (rare race condition), generate it now
+    if (_busIconCache[bus.busId] == null && _busIconCache['default'] == null) {
+      busIcon = await _buildBusPin(_busMarkerColor(bus.busId));
+      if (mounted) {
+        setState(() => _busIconCache[bus.busId] = busIcon);
+      }
+    }
+
+    // Simple marker — no rotation, custom icon with color tint
     final newMarkers = <Marker>{
       Marker(
         markerId: const MarkerId('bus'),
         position: displayPos,
-        icon: _busPin ?? BitmapDescriptor.defaultMarker,
+        icon: busIcon,
         infoWindow: InfoWindow(
           title: bus.name,
           snippet: '${bus.speed.toStringAsFixed(0)} km/h • ${bus.route}',
@@ -635,20 +563,22 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
     };
 
     // Stop flag markers — loaded from Firebase via stoppagesProvider
-    final stoppages =
-        ref.read(stoppagesProvider(widget.busId)).valueOrNull ?? [];
-    for (final stop in stoppages) {
-      newMarkers.add(Marker(
-        markerId: MarkerId('stop_${stop.id}'),
-        position: LatLng(stop.position.latitude, stop.position.longitude),
-        icon: _stopFlagIcon ?? BitmapDescriptor.defaultMarker,
-        anchor: const Offset(0.5, 1.0),
-        zIndex: 2,
-        infoWindow: InfoWindow(
-          title: stop.name,
-          snippet: _etaText(stop, bus),
-        ),
-      ));
+    if (widget.busId != null) {
+      final stoppages =
+          ref.read(stoppagesProvider(widget.busId!)).valueOrNull ?? [];
+      for (final stop in stoppages) {
+        newMarkers.add(Marker(
+          markerId: MarkerId('stop_${stop.id}'),
+          position: LatLng(stop.position.latitude, stop.position.longitude),
+          icon: _stopFlagIcon ?? BitmapDescriptor.defaultMarker,
+          anchor: const Offset(0.5, 1.0),
+          zIndex: 2,
+          infoWindow: InfoWindow(
+            title: stop.name,
+            snippet: _etaText(stop, bus),
+          ),
+        ));
+      }
     }
 
     // _polylines field নেই — setState এ শুধু _markers update করো
@@ -684,7 +614,9 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
       });
 
   void _shareLocation(BusModel bus) {
-    final deepLink = 'https://unitrackapp.page.link/bus?id=${widget.busId}';
+    final deepLink = widget.busId != null
+        ? 'https://unitrackapp.page.link/bus?id=${widget.busId}'
+        : 'https://unitrackapp.page.link/';
     final text = '\u{1F4FD} Track ${bus.name} live on UniTrack!\n'
         'Route: ${bus.route}\n'
         'Tap to open: $deepLink';
@@ -695,41 +627,52 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
 
   @override
   Widget build(BuildContext context) {
-    final busAsync = ref.watch(busDetailProvider(widget.busId));
+    // Single-bus mode: watch specific bus; All-buses mode: watch all buses
+    final busAsync = widget.busId != null
+        ? ref.watch(busDetailProvider(widget.busId!))
+        : ref.watch(busesListProvider);
 
-    ref.listen<AsyncValue<BusModel?>>(busDetailProvider(widget.busId),
-        (_, next) {
-      next.whenData((bus) {
-        if (bus != null) _onBusUpdateReceived(bus);
+    if (widget.busId != null) {
+      ref.listen<AsyncValue<BusModel?>>(busDetailProvider(widget.busId!),
+          (_, next) {
+        next.whenData((bus) {
+          if (bus != null) _onBusUpdateReceived(bus);
+        });
       });
-    });
 
-    // FIX: stoppages listener with explicit busId guard
-    ref.listen<AsyncValue<List<Stoppage>>>(stoppagesProvider(widget.busId),
-        (_, next) {
-      next.whenData((stoppages) {
-        // FIX 6: Bus data may not be loaded yet when stoppages arrive first.
-        // Previously this returned silently — now log it so the issue is
-        // visible during debugging instead of being swallowed.
-        final bus = ref.read(busDetailProvider(widget.busId)).valueOrNull;
-        if (bus == null) {
-          debugPrint(
-              'UniTrack: stoppages update received but busDetailProvider(${widget.busId}) is not loaded yet — skipping overlay update.');
-          return;
-        }
-        if (mounted) _updateMapOverlays(bus);
+      // FIX: stoppages listener with explicit busId guard
+      ref.listen<AsyncValue<List<Stoppage>>>(stoppagesProvider(widget.busId!),
+          (_, next) {
+        next.whenData((stoppages) {
+          // FIX 6: Bus data may not be loaded yet when stoppages arrive first.
+          // Previously this returned silently — now log it so the issue is
+          // visible during debugging instead of being swallowed.
+          final bus = ref.read(busDetailProvider(widget.busId!)).valueOrNull;
+          if (bus == null) {
+            debugPrint(
+                'UniTrack: stoppages update received but busDetailProvider(${widget.busId}) is not loaded yet — skipping overlay update.');
+            return;
+          }
+          if (mounted) _updateMapOverlays(bus);
+        });
       });
-    });
+    }
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
         backgroundColor: Colors.black,
-        body: busAsync.when(
-          loading: () => _buildLoading(),
-          error: (e, _) => _buildError(e.toString()),
-          data: (bus) => bus == null ? _buildLoading() : _buildMap(bus),
-        ),
+        body: widget.busId != null
+            ? (busAsync as AsyncValue<BusModel?>).when(
+                loading: () => _buildLoading(),
+                error: (e, _) => _buildError(e.toString()),
+                data: (bus) => bus == null ? _buildLoading() : _buildMap(bus),
+              )
+            : (busAsync as AsyncValue<List<BusModel>>).when(
+                loading: () => _buildLoading(),
+                error: (e, _) => _buildError(e.toString()),
+                data: (buses) => _buildAllBusesMap(buses),
+              ),
       ),
     );
   }
@@ -749,8 +692,10 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
             _mapCtrl = ctrl;
             setState(() => _mapLoaded = true);
             // Map load হওয়ার সাথে সাথেই existing stoppages দেখাও
-            final bus = ref.read(busDetailProvider(widget.busId)).valueOrNull;
-            if (bus != null) _updateMapOverlays(bus);
+            if (widget.busId != null) {
+              final bus = ref.read(busDetailProvider(widget.busId!)).valueOrNull;
+              if (bus != null) _updateMapOverlays(bus);
+            }
           },
           markers: _markers,
           polylines: const {}, // STEP 7: breadcrumb trail removed
@@ -779,6 +724,346 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
     );
   }
 
+  Widget _buildAllBusesMap(List<BusModel> buses) {
+    final activeBuses = buses.where((b) => b.active).toList();
+    final initialTarget = activeBuses.isNotEmpty
+        ? LatLng(activeBuses.first.lat, activeBuses.first.lng)
+        : _defaultMapPos;
+
+    // Compute markers directly without setState during build
+    final markers = _buildAllBusesMarkerSet(activeBuses);
+
+    return Stack(
+      children: [
+        GoogleMap(
+          initialCameraPosition:
+              CameraPosition(target: initialTarget, zoom: 15.5),
+          onMapCreated: (ctrl) {
+            _mapCtrl = ctrl;
+            setState(() => _mapLoaded = true);
+            // Fit all active buses in view
+            if (activeBuses.isNotEmpty) {
+              _fitAllBusesInView(activeBuses);
+            }
+          },
+          markers: markers,
+          polylines: const {},
+          myLocationEnabled: false,
+          myLocationButtonEnabled: false,
+          zoomControlsEnabled: false,
+          compassEnabled: false,
+          mapToolbarEnabled: false,
+          onCameraMoveStarted: () {
+            if (_following) setState(() => _following = false);
+          },
+          mapType: _mapType,
+          trafficEnabled: _trafficEnabled,
+        ),
+        if (_isOffline) _buildOfflineBanner(),
+        _buildAllBusesTopBar(activeBuses),
+        Positioned(right: 16, bottom: 240, child: _buildMapControlsForAllBuses()),
+      ],
+    );
+  }
+
+  void _fitAllBusesInView(List<BusModel> buses) {
+    if (buses.isEmpty || _mapCtrl == null) return;
+
+    double minLat = buses.first.lat;
+    double maxLat = buses.first.lat;
+    double minLng = buses.first.lng;
+    double maxLng = buses.first.lng;
+
+    for (final bus in buses) {
+      if (bus.lat < minLat) minLat = bus.lat;
+      if (bus.lat > maxLat) maxLat = bus.lat;
+      if (bus.lng < minLng) minLng = bus.lng;
+      if (bus.lng > maxLng) maxLng = bus.lng;
+    }
+
+    final bounds = LatLngBounds(
+      southwest: LatLng(minLat, minLng),
+      northeast: LatLng(maxLat, maxLng),
+    );
+
+    _mapCtrl?.animateCamera(
+      CameraUpdate.newLatLngBounds(bounds, 100),
+    );
+  }
+
+  Color _busMarkerColor(String busId) {
+    // Map busId to actual Color for custom icon tinting
+    switch (busId) {
+      case 'bus_001':
+        return Colors.red;
+      case 'bus_002':
+        return Colors.green;
+      case 'bus_003':
+        return Colors.blue;
+      case 'bus_004':
+        return Colors.orange;
+      case 'bus_005':
+        return const Color(0xFFE91E63); // Pink/Rose
+      default:
+        return AppColors.navy; // Default to app navy for unknown buses
+    }
+  }
+
+  // Custom canvas-drawn bus pin with configurable color
+  Future<BitmapDescriptor> _buildBusPin(Color color) async {
+    const double W = 56.0;
+    const double H = 72.0;
+    const double cx = W / 2;
+    const double r = 22.0;
+    const double cy = r + 5;
+    const double tipY = H - 5;
+    final double D = tipY - cy;
+    final double alpha = math.acos(r / D);
+    final double leftJoinAngle = math.pi / 2 + alpha;
+    final double sweepAngle = 2 * (math.pi - alpha);
+    final double lx = cx + r * math.cos(leftJoinAngle);
+    final double ly = cy + r * math.sin(leftJoinAngle);
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    // Drop shadow
+    final shadowPath = Path();
+    shadowPath.moveTo(cx + 2, tipY + 2);
+    shadowPath.lineTo(lx + 2, ly + 2);
+    shadowPath.arcTo(
+      Rect.fromCircle(center: Offset(cx + 2, cy + 2), radius: r),
+      leftJoinAngle,
+      sweepAngle,
+      false,
+    );
+    shadowPath.lineTo(cx + 2, tipY + 2);
+    shadowPath.close();
+
+    canvas.drawPath(
+      shadowPath,
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.22)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+    );
+
+    // Pin body with custom color
+    final pinPath = Path();
+    pinPath.moveTo(cx, tipY);
+    pinPath.lineTo(lx, ly);
+    pinPath.arcTo(
+      Rect.fromCircle(center: Offset(cx, cy), radius: r),
+      leftJoinAngle,
+      sweepAngle,
+      false,
+    );
+    pinPath.lineTo(cx, tipY);
+    pinPath.close();
+
+    canvas.drawPath(
+      pinPath,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.fill,
+    );
+
+    // Highlight
+    canvas.drawArc(
+      Rect.fromCircle(center: Offset(cx - 3, cy - 3), radius: r * 0.72),
+      math.pi * 1.1,
+      math.pi * 0.65,
+      false,
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.18)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.5
+        ..strokeCap = StrokeCap.round,
+    );
+
+    // White circle hole
+    canvas.drawCircle(
+      Offset(cx, cy),
+      r * 0.415,
+      Paint()..color = Colors.white,
+    );
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(W.toInt(), H.toInt());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+
+    return BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
+  }
+
+  // Pre-generate bus icons for all known bus IDs
+  Future<void> _preloadBusIcons() async {
+    final knownBusIds = ['bus_001', 'bus_002', 'bus_003', 'bus_004', 'bus_005'];
+    for (final busId in knownBusIds) {
+      final color = _busMarkerColor(busId);
+      final icon = await _buildBusPin(color);
+      _busIconCache[busId] = icon;
+    }
+    // Also pre-generate a default icon for unknown buses
+    final defaultIcon = await _buildBusPin(AppColors.navy);
+    _busIconCache['default'] = defaultIcon;
+  }
+
+  Set<Marker> _buildAllBusesMarkerSet(List<BusModel> buses) {
+    final newMarkers = <Marker>{};
+    for (final bus in buses) {
+      // Use cached custom icon if available, otherwise fall back to default marker
+      final icon = _busIconCache[bus.busId] ??
+          _busIconCache['default'] ??
+          BitmapDescriptor.defaultMarker;
+      newMarkers.add(Marker(
+        markerId: MarkerId('bus_${bus.busId}'),
+        position: LatLng(bus.lat, bus.lng),
+        icon: icon,
+        infoWindow: InfoWindow(
+          title: bus.name,
+          snippet: '${bus.speed.toStringAsFixed(0)} km/h • ${bus.route}',
+        ),
+        anchor: const Offset(0.5, 1.0),
+        zIndex: 3,
+      ));
+    }
+    return newMarkers;
+  }
+
+  Widget _buildAllBusesTopBar(List<BusModel> activeBuses) {
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: Container(
+        padding: EdgeInsets.only(
+          top: MediaQuery.of(context).padding.top + 8,
+          left: 8,
+          right: 8,
+          bottom: 12,
+        ),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Colors.black.withValues(alpha: 0.75), Colors.transparent],
+          ),
+        ),
+        child: Row(
+          children: [
+            _GlassButton(
+              onTap: () => Navigator.pop(context),
+              child: const Icon(Icons.arrow_back_ios_new_rounded,
+                  color: Colors.white, size: 18),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.15), width: 1),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: activeBuses.isNotEmpty ? AppColors.green : AppColors.textMuted,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${activeBuses.length} Active Bus${activeBuses.length == 1 ? '' : 'es'}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontFamily: AppTextStyles.fontFamily,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMapControlsForAllBuses() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _GlassButton(
+          onTap: () => _mapCtrl?.animateCamera(CameraUpdate.zoomIn()),
+          child: const Icon(Icons.add_rounded, color: Colors.white, size: 20),
+        ),
+        const SizedBox(height: 8),
+        _GlassButton(
+          onTap: () => _mapCtrl?.animateCamera(CameraUpdate.zoomOut()),
+          child: const Icon(Icons.remove_rounded, color: Colors.white, size: 20),
+        ),
+        const SizedBox(height: 8),
+        _GlassButton(
+          onTap: _toggleTraffic,
+          size: 44,
+          active: _trafficEnabled,
+          child: Icon(Icons.traffic_rounded,
+              color: _trafficEnabled ? AppColors.green : Colors.white, size: 20),
+        ),
+        const SizedBox(height: 8),
+        GestureDetector(
+          onTap: _toggleMapType,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 250),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: _mapType == MapType.satellite
+                  ? AppColors.navy.withValues(alpha: 0.9)
+                  : Colors.black.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: _mapType == MapType.satellite
+                    ? AppColors.navyLight.withValues(alpha: 0.6)
+                    : Colors.white.withValues(alpha: 0.15),
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  _mapType == MapType.satellite
+                      ? Icons.map_rounded
+                      : Icons.satellite_alt_rounded,
+                  color: Colors.white,
+                  size: 16,
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  _mapType == MapType.satellite ? 'Normal' : 'Satellite',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontFamily: AppTextStyles.fontFamily,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildOfflineBanner() {
     return Positioned(
       top: MediaQuery.of(context).padding.top + 60,
@@ -787,7 +1072,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          color: _C.amber.withOpacity(0.9),
+          color: AppColors.amber.withValues(alpha: 0.9),
           borderRadius: BorderRadius.circular(8),
         ),
         child: const Row(
@@ -799,7 +1084,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                 'Offline — showing last known location',
                 style: TextStyle(
                   color: Colors.white,
-                  fontFamily: 'DM Sans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                 ),
@@ -827,7 +1112,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Colors.black.withOpacity(0.75), Colors.transparent],
+            colors: [Colors.black.withValues(alpha: 0.75), Colors.transparent],
           ),
         ),
         child: Row(
@@ -843,10 +1128,10 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                 padding:
                     const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.55),
+                  color: Colors.black.withValues(alpha: 0.55),
                   borderRadius: BorderRadius.circular(28),
                   border: Border.all(
-                      color: Colors.white.withOpacity(0.15), width: 1),
+                      color: Colors.white.withValues(alpha: 0.15), width: 1),
                 ),
                 child: Row(
                   children: [
@@ -859,7 +1144,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                           height: 8,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: bus.active ? _C.green : _C.textMuted,
+                            color: bus.active ? AppColors.green : AppColors.textMuted,
                           ),
                         ),
                       ),
@@ -874,7 +1159,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                             bus.name,
                             style: const TextStyle(
                               color: Colors.white,
-                              fontFamily: 'DM Sans',
+                              fontFamily: AppTextStyles.fontFamily,
                               fontWeight: FontWeight.w700,
                               fontSize: 14,
                             ),
@@ -882,8 +1167,8 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                           Text(
                             bus.route,
                             style: TextStyle(
-                                color: Colors.white.withOpacity(0.6),
-                                fontFamily: 'DM Sans',
+                                color: Colors.white.withValues(alpha: 0.6),
+                                fontFamily: AppTextStyles.fontFamily,
                                 fontSize: 11),
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -895,22 +1180,22 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                           horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
                         color: bus.active
-                            ? _C.green.withOpacity(0.2)
-                            : Colors.white.withOpacity(0.1),
+                            ? AppColors.green.withValues(alpha: 0.2)
+                            : Colors.white.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
                           color: bus.active
-                              ? _C.green.withOpacity(0.5)
-                              : Colors.white.withOpacity(0.15),
+                              ? AppColors.green.withValues(alpha: 0.5)
+                              : Colors.white.withValues(alpha: 0.15),
                         ),
                       ),
                       child: Text(
                         bus.active ? 'LIVE' : 'OFFLINE',
                         style: TextStyle(
                           fontSize: 9,
-                          fontFamily: 'DM Sans',
+                          fontFamily: AppTextStyles.fontFamily,
                           fontWeight: FontWeight.w800,
-                          color: bus.active ? _C.green : _C.textMuted,
+                          color: bus.active ? AppColors.green : AppColors.textMuted,
                           letterSpacing: 1.2,
                         ),
                       ),
@@ -938,25 +1223,25 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: isStationary
-            ? Colors.black.withOpacity(0.6)
-            : _C.navy.withOpacity(0.9),
+            ? Colors.black.withValues(alpha: 0.6)
+            : AppColors.navy.withValues(alpha: 0.9),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withOpacity(0.15)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
             isStationary ? Icons.pause_circle_rounded : Icons.speed_rounded,
-            color: isStationary ? _C.textMuted : Colors.white,
+            color: isStationary ? AppColors.textMuted : Colors.white,
             size: 14,
           ),
           const SizedBox(width: 5),
           Text(
             isStationary ? 'Stopped' : '${speed.toStringAsFixed(0)} km/h',
             style: TextStyle(
-              color: isStationary ? _C.textMuted : Colors.white,
-              fontFamily: 'DM Sans',
+              color: isStationary ? AppColors.textMuted : Colors.white,
+              fontFamily: AppTextStyles.fontFamily,
               fontWeight: FontWeight.w700,
               fontSize: 12,
             ),
@@ -978,7 +1263,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
             _following
                 ? Icons.my_location_rounded
                 : Icons.location_searching_rounded,
-            color: _following ? _C.green : Colors.white,
+            color: _following ? AppColors.green : Colors.white,
             size: 20,
           ),
         ),
@@ -999,7 +1284,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
           size: 44,
           active: _trafficEnabled,
           child: Icon(Icons.traffic_rounded,
-              color: _trafficEnabled ? _C.green : Colors.white, size: 20),
+              color: _trafficEnabled ? AppColors.green : Colors.white, size: 20),
         ),
         const SizedBox(height: 8),
         GestureDetector(
@@ -1009,13 +1294,13 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
               color: _mapType == MapType.satellite
-                  ? _C.navy.withOpacity(0.9)
-                  : Colors.black.withOpacity(0.5),
+                  ? AppColors.navy.withValues(alpha: 0.9)
+                  : Colors.black.withValues(alpha: 0.5),
               borderRadius: BorderRadius.circular(14),
               border: Border.all(
                 color: _mapType == MapType.satellite
-                    ? _C.navyLight.withOpacity(0.6)
-                    : Colors.white.withOpacity(0.15),
+                    ? AppColors.navyLight.withValues(alpha: 0.6)
+                    : Colors.white.withValues(alpha: 0.15),
               ),
             ),
             child: Row(
@@ -1033,7 +1318,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                   _mapType == MapType.satellite ? 'Normal' : 'Satellite',
                   style: const TextStyle(
                     color: Colors.white,
-                    fontFamily: 'DM Sans',
+                    fontFamily: AppTextStyles.fontFamily,
                     fontWeight: FontWeight.w600,
                     fontSize: 11,
                   ),
@@ -1051,7 +1336,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
         ? bus.driverName!
         : 'Driver not specified';
     final driverNameColor =
-        (bus.driverName?.isNotEmpty ?? false) ? _C.textPrimary : _C.textMuted;
+        (bus.driverName?.isNotEmpty ?? false) ? AppColors.textPrimary : AppColors.textMuted;
 
     return DraggableScrollableSheet(
       controller: _sheetCtrl,
@@ -1066,7 +1351,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
               .animate(_panelAnim),
           child: Container(
             decoration: const BoxDecoration(
-              color: _C.cardBg,
+              color: AppColors.cardBg,
               borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
               boxShadow: [
                 BoxShadow(
@@ -1088,7 +1373,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                         width: 40,
                         height: 4,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFDDE1F0),
+                          color: AppColors.border,
                           borderRadius: BorderRadius.circular(4),
                         ),
                       ),
@@ -1109,9 +1394,9 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                                         bus.name,
                                         style: const TextStyle(
                                           fontSize: 18,
-                                          fontFamily: 'DM Sans',
+                                          fontFamily: AppTextStyles.fontFamily,
                                           fontWeight: FontWeight.w800,
-                                          color: _C.textPrimary,
+                                          color: AppColors.textPrimary,
                                           letterSpacing: -0.3,
                                         ),
                                       ),
@@ -1119,14 +1404,14 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                                       Row(
                                         children: [
                                           const Icon(Icons.route_rounded,
-                                              size: 12, color: _C.textMuted),
+                                              size: 12, color: AppColors.textMuted),
                                           const SizedBox(width: 4),
                                           Text(
                                             bus.route,
                                             style: const TextStyle(
                                               fontSize: 12,
-                                              fontFamily: 'DM Sans',
-                                              color: _C.textSecondary,
+                                              fontFamily: AppTextStyles.fontFamily,
+                                              color: AppColors.textSecondary,
                                             ),
                                           ),
                                         ],
@@ -1137,15 +1422,15 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                                         Row(
                                           children: [
                                             Icon(Icons.turn_right_rounded,
-                                                size: 12, color: _C.navy),
+                                                size: 12, color: AppColors.navy),
                                             const SizedBox(width: 4),
                                             Expanded(
                                               child: Text(
                                                 _currentPlaceName,
                                                 style: const TextStyle(
                                                   fontSize: 11,
-                                                  fontFamily: 'DM Sans',
-                                                  color: _C.navy,
+                                                  fontFamily: AppTextStyles.fontFamily,
+                                                  color: AppColors.navy,
                                                   fontWeight: FontWeight.w500,
                                                 ),
                                                 overflow: TextOverflow.ellipsis,
@@ -1166,22 +1451,22 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 10, vertical: 6),
                                 decoration: BoxDecoration(
-                                  color: _C.amberSoft,
+                                  color: AppColors.amberSoft,
                                   borderRadius: BorderRadius.circular(20),
                                 ),
                                 child: const Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Icon(Icons.pause_circle_outline_rounded,
-                                        size: 14, color: _C.amber),
+                                        size: 14, color: AppColors.amber),
                                     SizedBox(width: 4),
                                     Text(
                                       'Bus is currently halted',
                                       style: TextStyle(
                                         fontSize: 11,
-                                        fontFamily: 'DM Sans',
+                                        fontFamily: AppTextStyles.fontFamily,
                                         fontWeight: FontWeight.w600,
-                                        color: _C.amber,
+                                        color: AppColors.amber,
                                       ),
                                     ),
                                   ],
@@ -1201,7 +1486,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                               value: bus.active
                                   ? '${bus.speed.toStringAsFixed(0)} km/h'
                                   : '—',
-                              color: _C.navy,
+                              color: AppColors.navy,
                             ),
                             _StatStripDivider(),
                             _StatStrip(
@@ -1209,13 +1494,13 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                               label: 'Updated',
                               value: _formatTime(
                                   bus.lastUpdate?.millisecondsSinceEpoch),
-                              color: _C.textSecondary,
+                              color: AppColors.textSecondary,
                             ),
                           ],
                         ),
                       ),
                       const SizedBox(height: 16),
-                      const Divider(height: 1, color: _C.divider),
+                      const Divider(height: 1, color: AppColors.divider),
                       const SizedBox(height: 16),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -1225,11 +1510,11 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                               width: 38,
                               height: 38,
                               decoration: BoxDecoration(
-                                color: _C.navySurface,
+                                color: AppColors.navySurface,
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: const Icon(Icons.person_rounded,
-                                  color: _C.navy, size: 20),
+                                  color: AppColors.navy, size: 20),
                             ),
                             const SizedBox(width: 10),
                             Expanded(
@@ -1240,7 +1525,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                                     driverName,
                                     style: TextStyle(
                                       fontSize: 13,
-                                      fontFamily: 'DM Sans',
+                                      fontFamily: AppTextStyles.fontFamily,
                                       fontWeight: FontWeight.w600,
                                       color: driverNameColor,
                                     ),
@@ -1249,8 +1534,8 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                                     'Bus Driver',
                                     style: TextStyle(
                                       fontSize: 11,
-                                      fontFamily: 'DM Sans',
-                                      color: _C.textMuted,
+                                      fontFamily: AppTextStyles.fontFamily,
+                                      color: AppColors.textMuted,
                                     ),
                                   ),
                                 ],
@@ -1260,29 +1545,29 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 10, vertical: 5),
                               decoration: BoxDecoration(
-                                color: _C.navySurface,
+                                color: AppColors.navySurface,
                                 borderRadius: BorderRadius.circular(10),
                               ),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   Icon(
-                                    bus.trackMode == 'gps_device'
+                                    bus.trackMode.isGpsDevice
                                         ? Icons.router_rounded
                                         : Icons.phone_android_rounded,
                                     size: 12,
-                                    color: _C.navy,
+                                    color: AppColors.navy,
                                   ),
                                   const SizedBox(width: 4),
                                   Text(
-                                    bus.trackMode == 'gps_device'
+                                    bus.trackMode.isGpsDevice
                                         ? 'GPS Device'
                                         : 'Phone GPS',
                                     style: const TextStyle(
                                       fontSize: 10,
-                                      fontFamily: 'DM Sans',
+                                      fontFamily: AppTextStyles.fontFamily,
                                       fontWeight: FontWeight.w600,
-                                      color: _C.navy,
+                                      color: AppColors.navy,
                                     ),
                                   ),
                                 ],
@@ -1308,12 +1593,12 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          CircularProgressIndicator(color: _C.navy, strokeWidth: 2.5),
+          CircularProgressIndicator(color: AppColors.navy, strokeWidth: 2.5),
           SizedBox(height: 16),
           Text(
             'Loading map...',
             style: TextStyle(
-                fontFamily: 'DM Sans', color: _C.textSecondary, fontSize: 14),
+                fontFamily: AppTextStyles.fontFamily, color: AppColors.textSecondary, fontSize: 14),
           ),
         ],
       ),
@@ -1321,8 +1606,54 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
   }
 
   Widget _buildError(String msg) {
+    if (widget.busId == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.map_outlined, color: AppColors.textMuted, size: 48),
+              const SizedBox(height: 16),
+              const Text(
+                'Could not load map',
+                style: TextStyle(
+                  fontFamily: AppTextStyles.fontFamily,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                msg,
+                style: const TextStyle(
+                  fontFamily: AppTextStyles.fontFamily,
+                  color: AppColors.textSecondary,
+                  fontSize: 13,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.navy,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+                child: const Text('Go Back',
+                    style: TextStyle(fontFamily: AppTextStyles.fontFamily)),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return FutureBuilder<Map<String, dynamic>?>(
-      future: LocationCacheService.getLastPosition(widget.busId),
+      future: LocationCacheService.getLastPosition(widget.busId!),
       builder: (context, snapshot) {
         final cached = snapshot.data;
         return Center(
@@ -1333,7 +1664,7 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
               children: [
                 Icon(
                   cached != null ? Icons.cloud_off_rounded : Icons.map_outlined,
-                  color: _C.textMuted,
+                  color: AppColors.textMuted,
                   size: 48,
                 ),
                 const SizedBox(height: 16),
@@ -1342,10 +1673,10 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                       ? 'Offline — last known location'
                       : 'Could not load map',
                   style: const TextStyle(
-                    fontFamily: 'DM Sans',
+                    fontFamily: AppTextStyles.fontFamily,
                     fontWeight: FontWeight.w700,
                     fontSize: 16,
-                    color: _C.textPrimary,
+                    color: AppColors.textPrimary,
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -1354,8 +1685,8 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                       ? 'Bus was last seen at ${_formatTime(cached['time'] as int?)}'
                       : msg,
                   style: const TextStyle(
-                    fontFamily: 'DM Sans',
-                    color: _C.textSecondary,
+                    fontFamily: AppTextStyles.fontFamily,
+                    color: AppColors.textSecondary,
                     fontSize: 13,
                   ),
                   textAlign: TextAlign.center,
@@ -1364,13 +1695,13 @@ class _LiveMapScreenState extends ConsumerState<LiveMapScreen>
                 ElevatedButton(
                   onPressed: () => Navigator.pop(context),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: _C.navy,
+                    backgroundColor: AppColors.navy,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12)),
                   ),
                   child: const Text('Go Back',
-                      style: TextStyle(fontFamily: 'DM Sans')),
+                      style: TextStyle(fontFamily: AppTextStyles.fontFamily)),
                 ),
               ],
             ),
@@ -1407,13 +1738,13 @@ class _GlassButton extends StatelessWidget {
         height: size,
         decoration: BoxDecoration(
           color: active
-              ? Colors.white.withOpacity(0.2)
-              : Colors.black.withOpacity(0.5),
+              ? Colors.white.withValues(alpha: 0.2)
+              : Colors.black.withValues(alpha: 0.5),
           borderRadius: BorderRadius.circular(size / 2.5),
           border: Border.all(
             color: active
-                ? _C.green.withOpacity(0.5)
-                : Colors.white.withOpacity(0.15),
+                ? AppColors.green.withValues(alpha: 0.5)
+                : Colors.white.withValues(alpha: 0.15),
           ),
         ),
         child: Center(child: child),
@@ -1446,18 +1777,18 @@ class _StatStrip extends StatelessWidget {
             value,
             style: TextStyle(
               fontSize: 13,
-              fontFamily: 'DM Sans',
+              fontFamily: AppTextStyles.fontFamily,
               fontWeight: FontWeight.w700,
               color:
-                  color == _C.textSecondary ? _C.textSecondary : _C.textPrimary,
+                  color == AppColors.textSecondary ? AppColors.textSecondary : AppColors.textPrimary,
             ),
           ),
           Text(
             label,
             style: const TextStyle(
               fontSize: 10,
-              fontFamily: 'DM Sans',
-              color: _C.textMuted,
+              fontFamily: AppTextStyles.fontFamily,
+              color: AppColors.textMuted,
             ),
           ),
         ],
@@ -1471,7 +1802,7 @@ class _StatStripDivider extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         width: 1,
         height: 36,
-        color: _C.divider,
+        color: AppColors.divider,
         margin: const EdgeInsets.symmetric(horizontal: 4),
       );
 }
@@ -1481,8 +1812,8 @@ class _StatStripDivider extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class StudentMapScreen extends StatelessWidget {
-  final String busId;
-  const StudentMapScreen({super.key, required this.busId});
+  final String? busId;
+  const StudentMapScreen({super.key, this.busId});
   @override
   Widget build(BuildContext context) => LiveMapScreen(busId: busId);
 }
@@ -1492,8 +1823,8 @@ class StudentMapScreen extends StatelessWidget {
 // Both roles share the same LiveMapScreen underneath; diverge here later
 // if teachers need extra controls (e.g. edit route, force-stop button).
 class TeacherMapScreen extends StatelessWidget {
-  final String busId;
-  const TeacherMapScreen({super.key, required this.busId});
+  final String? busId;
+  const TeacherMapScreen({super.key, this.busId});
   @override
   Widget build(BuildContext context) => LiveMapScreen(busId: busId);
 }

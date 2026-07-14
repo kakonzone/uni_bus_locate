@@ -6,39 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Colors (inline to avoid import issues)
-// ─────────────────────────────────────────────────────────────────────────────
-class _DC {
-  static const navy = Color(0xFF1B2CC1);
-  static const navyDark = Color(0xFF1221A3);
-  static const navyLight = Color(0xFF2D3FD4);
-  static const navySurface = Color(0xFFE8EAFB);
-  static const green = Color(0xFF22C55E);
-  static const textPrimary = Color(0xFF0F172A);
-  static const textSecondary = Color(0xFF64748B);
-  static const textMuted = Color(0xFF94A3B8);
-  static const divider = Color(0xFFE2E8F0);
-  static const bg = Color(0xFFF8F9FF);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Drawer Item Model
-// ─────────────────────────────────────────────────────────────────────────────
-class _DrawerItem {
-  const _DrawerItem({
-    required this.icon,
-    required this.label,
-    this.badge,
-    this.isDestructive = false,
-    this.onTap,
-  });
-  final IconData icon;
-  final String label;
-  final String? badge;
-  final bool isDestructive;
-  final VoidCallback? Function(BuildContext)? onTap;
-}
+import '../theme/app_color.dart';
+import '../theme/app_text_styles.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AppDrawer
@@ -84,11 +53,11 @@ class AppDrawer extends ConsumerWidget {
   Color get _roleColor {
     switch (role) {
       case 'teacher':
-        return const Color(0xFFF59E0B);
+        return AppColors.amber;
       case 'driver':
-        return _DC.green;
+        return AppColors.green;
       default:
-        return _DC.navy;
+        return AppColors.navy;
     }
   }
 
@@ -137,10 +106,10 @@ class AppDrawer extends ConsumerWidget {
                       Navigator.pop(context);
                       if (role == 'teacher') {
                         Navigator.pushNamed(context, '/teacher/map',
-                            arguments: '');
+                            arguments: null);
                       } else {
                         Navigator.pushNamed(context, '/student/map',
-                            arguments: '');
+                            arguments: null);
                       }
                     },
                   ),
@@ -154,7 +123,7 @@ class AppDrawer extends ConsumerWidget {
                   ],
 
                   const SizedBox(height: 16),
-                  const Divider(color: _DC.divider, thickness: 1),
+                  const Divider(color: AppColors.divider, thickness: 1),
                   const SizedBox(height: 12),
 
                   _SectionLabel(label: 'General'),
@@ -173,7 +142,7 @@ class AppDrawer extends ConsumerWidget {
                           width: 48,
                           height: 48,
                           decoration: BoxDecoration(
-                            color: _DC.navy,
+                            color: AppColors.navy,
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: const Icon(
@@ -185,7 +154,7 @@ class AppDrawer extends ConsumerWidget {
                         children: const [
                           Text(
                             'University Bus Tracking System — real-time GPS tracking for campus buses.',
-                            style: TextStyle(fontFamily: 'DM Sans'),
+                            style: TextStyle(fontFamily: AppTextStyles.fontFamily),
                           ),
                         ],
                       );
@@ -201,10 +170,10 @@ class AppDrawer extends ConsumerWidget {
                         SnackBar(
                           content: const Text(
                             'Contact: support@unitrack.edu.bd',
-                            style: TextStyle(fontFamily: 'DM Sans'),
+                            style: TextStyle(fontFamily: AppTextStyles.fontFamily),
                           ),
                           behavior: SnackBarBehavior.floating,
-                          backgroundColor: _DC.textPrimary,
+                          backgroundColor: AppColors.textPrimary,
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12)),
                         ),
@@ -213,7 +182,7 @@ class AppDrawer extends ConsumerWidget {
                   ),
 
                   const SizedBox(height: 16),
-                  const Divider(color: _DC.divider, thickness: 1),
+                  const Divider(color: AppColors.divider, thickness: 1),
                   const SizedBox(height: 12),
 
                   // ── Logout ──────────────────────────────────────────────
@@ -243,13 +212,13 @@ class AppDrawer extends ConsumerWidget {
         title: const Text(
           'Logout',
           style: TextStyle(
-            fontFamily: 'DM Sans',
+            fontFamily: AppTextStyles.fontFamily,
             fontWeight: FontWeight.w700,
           ),
         ),
         content: const Text(
           'Are you sure you want to logout?',
-          style: TextStyle(fontFamily: 'DM Sans'),
+          style: TextStyle(fontFamily: AppTextStyles.fontFamily),
         ),
         actions: [
           TextButton(
@@ -257,14 +226,14 @@ class AppDrawer extends ConsumerWidget {
             child: Text(
               'Cancel',
               style: TextStyle(
-                fontFamily: 'DM Sans',
+                fontFamily: AppTextStyles.fontFamily,
                 color: Colors.grey.shade600,
               ),
             ),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFEF4444),
+              backgroundColor: AppColors.red,
               foregroundColor: Colors.white,
               elevation: 0,
               shape: RoundedRectangleBorder(
@@ -282,7 +251,7 @@ class AppDrawer extends ConsumerWidget {
             child: const Text(
               'Logout',
               style:
-                  TextStyle(fontFamily: 'DM Sans', fontWeight: FontWeight.w600),
+                  TextStyle(fontFamily: AppTextStyles.fontFamily, fontWeight: FontWeight.w600),
             ),
           ),
         ],
@@ -317,7 +286,7 @@ class _DrawerHeader extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF1221A3), Color(0xFF2D3FD4)],
+          colors: [AppColors.navyDark, AppColors.navy],
         ),
         borderRadius: BorderRadius.only(topRight: Radius.circular(28)),
       ),
@@ -336,7 +305,7 @@ class _DrawerHeader extends StatelessWidget {
                   child: Container(
                     padding: const EdgeInsets.all(6),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.12),
+                      color: Colors.white.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: const Icon(
@@ -356,10 +325,10 @@ class _DrawerHeader extends StatelessWidget {
                     width: 62,
                     height: 62,
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.15),
+                      color: Colors.white.withValues(alpha: 0.15),
                       shape: BoxShape.circle,
                       border: Border.all(
-                        color: Colors.white.withOpacity(0.3),
+                        color: Colors.white.withValues(alpha: 0.3),
                         width: 2,
                       ),
                     ),
@@ -367,7 +336,7 @@ class _DrawerHeader extends StatelessWidget {
                       child: Text(
                         userName.isNotEmpty ? userName[0].toUpperCase() : '?',
                         style: const TextStyle(
-                          fontFamily: 'DM Sans',
+                          fontFamily: AppTextStyles.fontFamily,
                           fontSize: 26,
                           fontWeight: FontWeight.w800,
                           color: Colors.white,
@@ -397,7 +366,7 @@ class _DrawerHeader extends StatelessWidget {
               Text(
                 userName,
                 style: const TextStyle(
-                  fontFamily: 'DM Sans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
                   color: Colors.white,
@@ -410,7 +379,7 @@ class _DrawerHeader extends StatelessWidget {
               Text(
                 userId,
                 style: const TextStyle(
-                  fontFamily: 'DM Sans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 12,
                   color: Colors.white54,
                 ),
@@ -422,7 +391,7 @@ class _DrawerHeader extends StatelessWidget {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.14),
+                  color: Colors.white.withValues(alpha: 0.14),
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(color: Colors.white24),
                 ),
@@ -434,7 +403,7 @@ class _DrawerHeader extends StatelessWidget {
                     Text(
                       roleLabel,
                       style: const TextStyle(
-                        fontFamily: 'DM Sans',
+                        fontFamily: AppTextStyles.fontFamily,
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
                         color: Colors.white70,
@@ -466,10 +435,10 @@ class _SectionLabel extends StatelessWidget {
       child: Text(
         label.toUpperCase(),
         style: const TextStyle(
-          fontFamily: 'DM Sans',
+          fontFamily: AppTextStyles.fontFamily,
           fontSize: 10,
           fontWeight: FontWeight.w700,
-          color: _DC.textMuted,
+          color: AppColors.textMuted,
           letterSpacing: 1.2,
         ),
       ),
@@ -499,24 +468,24 @@ class _DrawerTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color activeColor = _DC.navy;
-    final Color destructColor = const Color(0xFFEF4444);
+    final Color activeColor = AppColors.navy;
+    final Color destructColor = AppColors.red;
     final Color color = isDestructive
         ? destructColor
         : isActive
             ? activeColor
-            : _DC.textSecondary;
+            : AppColors.textSecondary;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: Material(
-        color: isActive ? _DC.navy.withOpacity(0.08) : Colors.transparent,
+        color: isActive ? AppColors.navy.withValues(alpha: 0.08) : Colors.transparent,
         borderRadius: BorderRadius.circular(14),
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(14),
-          splashColor: color.withOpacity(0.08),
-          highlightColor: color.withOpacity(0.05),
+          splashColor: color.withValues(alpha: 0.08),
+          highlightColor: color.withValues(alpha: 0.05),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
             child: Row(
@@ -526,10 +495,10 @@ class _DrawerTile extends StatelessWidget {
                   height: 36,
                   decoration: BoxDecoration(
                     color: isActive
-                        ? _DC.navy.withOpacity(0.10)
+                        ? AppColors.navy.withValues(alpha: 0.10)
                         : isDestructive
-                            ? destructColor.withOpacity(0.08)
-                            : _DC.bg,
+                            ? destructColor.withValues(alpha: 0.08)
+                            : AppColors.pageBg,
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(icon, size: 18, color: color),
@@ -539,10 +508,10 @@ class _DrawerTile extends StatelessWidget {
                   child: Text(
                     label,
                     style: TextStyle(
-                      fontFamily: 'DM Sans',
+                      fontFamily: AppTextStyles.fontFamily,
                       fontSize: 14,
                       fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                      color: isDestructive ? destructColor : _DC.textPrimary,
+                      color: isDestructive ? destructColor : AppColors.textPrimary,
                     ),
                   ),
                 ),
@@ -551,13 +520,13 @@ class _DrawerTile extends StatelessWidget {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
-                      color: _DC.navy,
+                      color: AppColors.navy,
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
                       badge!,
                       style: const TextStyle(
-                        fontFamily: 'DM Sans',
+                        fontFamily: AppTextStyles.fontFamily,
                         fontSize: 10,
                         fontWeight: FontWeight.w700,
                         color: Colors.white,
@@ -566,7 +535,7 @@ class _DrawerTile extends StatelessWidget {
                   ),
                 ],
                 if (isActive)
-                  Icon(Icons.circle, size: 6, color: _DC.navy.withOpacity(0.5)),
+                  Icon(Icons.circle, size: 6, color: AppColors.navy.withValues(alpha: 0.5)),
               ],
             ),
           ),
@@ -589,10 +558,10 @@ class _DrawerFooter extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(20, 14, 20, 28),
       decoration: BoxDecoration(
-        color: _DC.bg,
+        color: AppColors.pageBg,
         borderRadius: const BorderRadius.only(bottomRight: Radius.circular(28)),
         border: Border(
-          top: BorderSide(color: _DC.divider, width: 1),
+          top: BorderSide(color: AppColors.divider, width: 1),
         ),
       ),
       child: Row(
@@ -601,7 +570,7 @@ class _DrawerFooter extends StatelessWidget {
             width: 32,
             height: 32,
             decoration: BoxDecoration(
-              color: _DC.navy,
+              color: AppColors.navy,
               borderRadius: BorderRadius.circular(9),
             ),
             child: const Icon(
@@ -618,18 +587,18 @@ class _DrawerFooter extends StatelessWidget {
               const Text(
                 'UniTrack',
                 style: TextStyle(
-                  fontFamily: 'DM Sans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
-                  color: _DC.textPrimary,
+                  color: AppColors.textPrimary,
                 ),
               ),
               Text(
                 'v1.0.0  ·  ${role[0].toUpperCase()}${role.substring(1)}',
                 style: const TextStyle(
-                  fontFamily: 'DM Sans',
+                  fontFamily: AppTextStyles.fontFamily,
                   fontSize: 10,
-                  color: _DC.textMuted,
+                  color: AppColors.textMuted,
                 ),
               ),
             ],

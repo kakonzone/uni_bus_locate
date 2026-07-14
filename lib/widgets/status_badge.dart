@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_color.dart';
+
 class StatusBadge extends StatelessWidget {
   final bool isActive;
 
@@ -7,12 +9,12 @@ class StatusBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = isActive ? const Color(0xFF1DB954) : const Color(0xFFE53935);
+    final color = isActive ? AppColors.activeGreen : AppColors.errorRed;
     final label = isActive ? 'Active' : 'Inactive';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Row(

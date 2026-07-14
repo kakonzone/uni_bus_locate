@@ -3,6 +3,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:isolate';
 import 'dart:ui';
 
@@ -10,12 +11,64 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../firebase_options.dart';
 import 'location_service.dart';
+
+// ─────────────────────────────────────────────
+// WATCHDOG ALARM CALLBACK
+// ─────────────────────────────────────────────
+// This callback runs periodically via Android AlarmManager to check if the
+// background service is still running. If the service was killed by OEM
+// battery optimizations, this watchdog attempts to restart it.
+
+@pragma('vm:entry-point')
+void watchdogCallback() async {
+  debugPrint('[Watchdog] Alarm triggered - checking service status');
+
+  try {
+    final prefs = await SharedPreferences.getInstance();
+
+    // Check if a trip is active using the existing key
+    final tripActive = prefs.getBool('bg_trip_active') ?? false;
+    final explicitStop = prefs.getBool('bg_explicit_stop') ?? false;
+
+    debugPrint('[Watchdog] tripActive: $tripActive, explicitStop: $explicitStop');
+
+    // Only restart if trip is active AND user didn't explicitly stop it
+    if (tripActive && !explicitStop) {
+      final busId = prefs.getString('bg_bus_id') ?? '';
+      final busName = prefs.getString('bg_bus_name') ?? 'Bus';
+      final busRoute = prefs.getString('bg_bus_route') ?? '';
+      final driverName = prefs.getString('bg_driver_name') ?? '';
+
+      if (busId.isNotEmpty) {
+        debugPrint('[Watchdog] Attempting to restart service for bus: $busId');
+
+        // Reuse existing BackgroundService.start() method
+        final service = BackgroundService();
+        await service.start(
+          busId: busId,
+          busName: busName,
+          busRoute: busRoute,
+          driverName: driverName,
+        );
+
+        debugPrint('[Watchdog] Service restart attempted');
+      } else {
+        debugPrint('[Watchdog] No valid busId found, skipping restart');
+      }
+    } else {
+      debugPrint('[Watchdog] No active trip or explicit stop, skipping restart');
+    }
+  } catch (e) {
+    debugPrint('[Watchdog] Error in watchdog callback: $e');
+  }
+}
 
 const String _firebaseDatabaseUrl =
     'https://uni-bus-locate-default-rtdb.asia-southeast1.firebasedatabase.app';
@@ -25,13 +78,11 @@ class _BgKeys {
   static const String busName = 'bg_bus_name';
   static const String busRoute = 'bg_bus_route';
   static const String driverName = 'bg_driver_name';
-  static const String trackMode = 'bg_track_mode';
   static const String isActive = 'bg_is_active';
   static const String tripActive = 'bg_trip_active';
   static const String tripStartMs = 'bg_trip_start_ms';
   static const String currentTripId = 'bg_current_trip_id';
   static const String portName = 'unitrack_bg_port';
-  static const int notifId = 1001;
   static const String notifChannelId = 'unitrack_location_channel';
   static const String notifChannelName = 'UniTrack Live Tracking';
   // ✅ FIX: Aligned with TripPersistenceKeys in lib/providers/tracking_provider.dart
@@ -143,7 +194,7 @@ class UniTrackTaskHandler extends TaskHandler {
   String _busRoute = '';
   String _driverName = '';
 
-  String _lastNotificationBody = '';
+  String _lastNotificationBody = ''; // Will be set to initial notification text on service start
 
   bool _destEnabled = false;
   double? _destLat;
@@ -295,6 +346,10 @@ class UniTrackTaskHandler extends TaskHandler {
           _driverName = data['driverName'] ?? _driverName;
           break;
 
+        case 'set_initial_notif':
+          _lastNotificationBody = data['initialNotifText'] as String? ?? '';
+          break;
+
         // ✅ FIX: 'stop' command এলে explicit stop flag set করো
         // তারপর service বন্ধ করো
         case 'stop':
@@ -411,6 +466,8 @@ class UniTrackTaskHandler extends TaskHandler {
       _isExplicitStop = true; // BUG 1: in-memory flag for onDestroy()
       await prefs.setBool(_BgKeys.explicitStop,
           true); // BUG 1: persisted flag (cross-isolate safe)
+      // Cancel watchdog alarm on geofence-triggered stop
+      await BackgroundService._cancelWatchdogAlarm();
       await FlutterForegroundTask.stopService();
     }
   }
@@ -653,6 +710,7 @@ class BackgroundService {
     await _requestNotificationPermission();
     _openReceivePort();
     await _requestBatteryOptimisationExemption();
+    await _requestExactAlarmPermission();
 
     final serviceRunning = await FlutterForegroundTask.isRunningService;
 
@@ -668,13 +726,19 @@ class BackgroundService {
       return true;
     }
 
+    final initialNotifText = 'Initialising GPS for $busName...';
     final result = await FlutterForegroundTask.startService(
       notificationTitle: '🚌 UniTrack — Starting',
-      notificationText: 'Initialising GPS for $busName...',
+      notificationText: initialNotifText,
     );
     final success = result is ServiceRequestSuccess;
 
     if (success) {
+      // Send initial notification text to background isolate so first GPS update will always differ
+      FlutterForegroundTask.sendDataToTask({
+        'cmd': 'set_initial_notif',
+        'initialNotifText': initialNotifText,
+      });
       await _flushOfflineQueue(busId: busId);
     }
 
@@ -772,8 +836,12 @@ class BackgroundService {
       if (requested) return;
       final isIgnoring =
           await FlutterForegroundTask.isIgnoringBatteryOptimizations;
+      debugPrint('[BackgroundService] Battery opt exemption - isIgnoring: $isIgnoring');
       if (!isIgnoring) {
         await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+        final isIgnoringAfter =
+            await FlutterForegroundTask.isIgnoringBatteryOptimizations;
+        debugPrint('[BackgroundService] Battery opt exemption - isIgnoring after request: $isIgnoringAfter');
       }
       await prefs.setBool('battery_opt_requested', true);
     } catch (e) {
@@ -790,6 +858,26 @@ class BackgroundService {
       await prefs.setBool('notification_perm_requested', true);
     } catch (e) {
       debugPrint('[BackgroundService] Notification permission error: $e');
+    }
+  }
+
+  Future<void> _requestExactAlarmPermission() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final requested = prefs.getBool('exact_alarm_requested') ?? false;
+      if (requested) return;
+
+      final status = await Permission.scheduleExactAlarm.status;
+      debugPrint('[BackgroundService] Exact alarm permission status before request: $status');
+
+      if (!status.isGranted) {
+        final result = await Permission.scheduleExactAlarm.request();
+        debugPrint('[BackgroundService] Exact alarm permission status after request: $result');
+      }
+
+      await prefs.setBool('exact_alarm_requested', true);
+    } catch (e) {
+      debugPrint('[BackgroundService] Exact alarm permission error: $e');
     }
   }
 
@@ -824,6 +912,37 @@ class BackgroundService {
     _messageController.close();
   }
 
+  // ─────────────────────────────────────────────
+  // WATCHDOG ALARM HELPERS
+  // ─────────────────────────────────────────────
+
+  static Future<void> _registerWatchdogAlarm() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await AndroidAlarmManager.periodic(
+        const Duration(minutes: 2),
+        0,
+        watchdogCallback,
+        exact: true,
+        wakeup: true,
+        rescheduleOnReboot: true,
+      );
+      debugPrint('[BackgroundService] Watchdog alarm registered (periodic every 2 minutes)');
+    } catch (e) {
+      debugPrint('[BackgroundService] Failed to register watchdog alarm: $e');
+    }
+  }
+
+  static Future<void> _cancelWatchdogAlarm() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await AndroidAlarmManager.cancel(0);
+      debugPrint('[BackgroundService] Watchdog alarm cancelled');
+    } catch (e) {
+      debugPrint('[BackgroundService] Failed to cancel watchdog alarm: $e');
+    }
+  }
+
   static Future<void> saveTripState({
     required String busId,
     required String busName,
@@ -846,6 +965,8 @@ class BackgroundService {
     await prefs.setBool(_BgKeys.explicitStop, false);
     await prefs.setString('driver_selected_bus_id', busId);
     await prefs.setString('driver_selected_bus_name', busName);
+    // Register watchdog alarm to detect if service gets killed by OEM optimizations
+    await _registerWatchdogAlarm();
     debugPrint('[BackgroundService] saveTripState → busId=$busId');
   }
 
@@ -854,6 +975,8 @@ class BackgroundService {
     await prefs.remove(_BgKeys.tripActive);
     await prefs.remove(_BgKeys.tripStartMs);
     await prefs.setBool(_BgKeys.isActive, false);
+    // Cancel watchdog alarm when trip is explicitly stopped
+    await _cancelWatchdogAlarm();
     debugPrint('[BackgroundService] clearTripState done');
   }
 

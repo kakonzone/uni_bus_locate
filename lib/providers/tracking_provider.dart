@@ -1,6 +1,6 @@
 // lib/providers/tracking_provider.dart
 // ─────────────────────────────────────────────────────────────────────────────
-// ALL BUGS FIXED (original BUG-1..5 + BUG-A..E + new BUG-F..H):
+// ALL BUGS FIXED (original BUG-1..5 + BUG-A..E + BUG-F..H + NEW-FIX-1):
 //
 //   ✅ BUG-1  : _writeToFirebase() / _writeKeepAlive() — unawaited() wrap +
 //               single in-flight guard দিয়ে race / out-of-order ঠেকানো
@@ -36,6 +36,7 @@
 //   ✅ BUG-H  : LOGIC — sleep mode activate হওয়া মাত্রই `active:true` write
 //               করা হচ্ছে; আগে keep-alive timer 30s পরে fire হত, ততক্ষণ
 //               bus offline দেখাত।
+//
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'dart:async';
@@ -43,8 +44,8 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:firebase_database/firebase_database.dart';
 
 import '../services/firebase_globals.dart';
 import '../models/tracking_model.dart';
@@ -169,6 +170,7 @@ class LiveLocationNotifier extends StateNotifier<LiveLocationState> {
     if (_currentBusId == null) {
       debugPrint('UniTrack WARNING: _currentBusId is null in startListening()');
     }
+
 
     // BUG-3 FIX: sleep mode-এ stream শুরু না করে early return
     if (mode == TrackingMode.sleep) {
@@ -455,10 +457,13 @@ class LiveLocationNotifier extends StateNotifier<LiveLocationState> {
     if (_stopped) return;
     if (_currentBusId == null || _currentBusId!.isEmpty) return;
     if (_writeInFlight) return;
+
     _writeInFlight = true;
     try {
       // double-check: await/scheduling-এর মাঝে stopListening() চলে আসতে পারে
       if (_stopped || _currentBusId == null || _currentBusId!.isEmpty) return;
+
+      final writeStart = DateTime.now();
       await globalDB.ref('buses/$_currentBusId').update({
         'lat': pos.latitude,
         'lng': pos.longitude,
@@ -467,6 +472,9 @@ class LiveLocationNotifier extends StateNotifier<LiveLocationState> {
         'lastUpdate': DateTime.now().millisecondsSinceEpoch,
         'active': true,
       });
+      final writeEnd = DateTime.now();
+      debugPrint(
+          'UniTrack [TIMESTAMP]: Firebase write at ${writeEnd.toIso8601String()}, duration=${writeEnd.difference(writeStart).inMilliseconds}ms');
       // BUG-D FIX: write সফল হলে তবেই timestamp update — failed হলে
       // null থাকে, পরের cycle-এ retry পাবে
       _lastWrittenAt = DateTime.now();
@@ -509,13 +517,15 @@ class LiveLocationNotifier extends StateNotifier<LiveLocationState> {
         if (Platform.isAndroid) {
           return AndroidSettings(
             accuracy: LocationAccuracy.high,
-            distanceFilter: 0,
+            distanceFilter:
+                5, // Changed from 0 to reduce GPS noise-induced jitter
             intervalDuration: const Duration(milliseconds: 500),
           );
         }
         return const LocationSettings(
           accuracy: LocationAccuracy.high,
-          distanceFilter: 0,
+          distanceFilter:
+              5, // Changed from 0 to reduce GPS noise-induced jitter
         );
       case TrackingMode.lowPower:
         return const LocationSettings(

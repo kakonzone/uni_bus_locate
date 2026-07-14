@@ -2,9 +2,9 @@
 // UniTrack — Push Notification Service for Bus Nearby Alerts
 
 import 'dart:typed_data' show Int64List;
-import 'dart:ui' show Color;
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import '../theme/app_color.dart';
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _plugin =
@@ -84,9 +84,9 @@ class NotificationService {
       importance: Importance.high,
       priority: Priority.high,
       icon: '@mipmap/ic_launcher',
-      color: Color(0xFF1B2CC1),
+      color: AppColors.navy,
       enableLights: true,
-      ledColor: Color(0xFF1B2CC1),
+      ledColor: AppColors.navy,
       ledOnMs: 1000,
       ledOffMs: 500,
       playSound: true,

@@ -4,6 +4,8 @@
 
 import 'package:flutter/material.dart';
 
+import '../theme/app_text_styles.dart';
+
 // ─────────────────────────────────────────────
 // Enum: which kind of stat this chip represents
 // ─────────────────────────────────────────────
@@ -374,7 +376,7 @@ class _ChipShell extends StatelessWidget {
           Text(
             c.value,
             style: TextStyle(
-              fontFamily: 'DM Sans',
+              fontFamily: AppTextStyles.fontFamily,
               fontSize: d.valueSize,
               fontWeight: FontWeight.w600,
               color: c.textColor,
@@ -399,10 +401,10 @@ class _ChipShell extends StatelessWidget {
             Text(
               c.label.toUpperCase(),
               style: TextStyle(
-                fontFamily: 'DM Sans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: d.labelSize,
                 fontWeight: FontWeight.w500,
-                color: c.textColor.withOpacity(0.65),
+                color: c.textColor.withValues(alpha: 0.65),
                 letterSpacing: 0.6,
                 height: 1,
               ),
@@ -411,7 +413,7 @@ class _ChipShell extends StatelessWidget {
             Text(
               c.value,
               style: TextStyle(
-                fontFamily: 'DM Sans',
+                fontFamily: AppTextStyles.fontFamily,
                 fontSize: d.valueSize,
                 fontWeight: FontWeight.w700,
                 color: c.textColor,
@@ -476,7 +478,7 @@ class _SkeletonBoxState extends State<_SkeletonBox>
         width: widget.width,
         height: widget.height,
         decoration: BoxDecoration(
-          color: Colors.grey.withOpacity(_anim.value),
+          color: Colors.grey.withValues(alpha: _anim.value),
           borderRadius: BorderRadius.circular(widget.radius),
         ),
       ),
@@ -545,7 +547,7 @@ class _PulsingDotState extends State<_PulsingDot>
                 width: s,
                 height: s,
                 decoration: BoxDecoration(
-                  color: widget.color.withOpacity(_opacity.value),
+                  color: widget.color.withValues(alpha: _opacity.value),
                   shape: BoxShape.circle,
                 ),
               ),
